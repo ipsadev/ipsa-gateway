@@ -319,6 +319,21 @@ impl StellarGatewayQuery for QueryHandler {
         let seq = request.into_inner().height as u32;
         tracing::debug!(sequence = seq, "gRPC QueryIbcHeader");
 
+        // A proof for state committed at ledger H is verified against the header at
+        // H+1 (the ledger app-hash lags one ledger), so the requested header ledger
+        // may be latest+1 and not yet closed. Wait for it before fetching.
+        for _ in 0..6 {
+            let latest = self.api.get_latest_ledger().await.map_err(|error| {
+                tracing::error!(%error, "get_latest_ledger failed (waiting for header ledger)");
+                Status::internal(format!("get_latest_ledger failed: {error}"))
+            })?;
+            if latest >= seq {
+                break;
+            }
+            tracing::debug!(sequence = seq, latest, "header ledger not closed yet, waiting");
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+
         let ledger = self.api.get_ledger(seq).await.map_err(|error| {
             tracing::error!(%error, sequence = seq, "get_ledger failed");
             Status::internal(format!("getLedger failed: {error}"))
