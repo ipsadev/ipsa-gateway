@@ -5,6 +5,8 @@ pub struct GatewayConfig {
     pub grpc_port: u16,
     pub api_url: String,
     pub ibc_contract_id: String,
+    pub transfer_contract_id: String,
+    pub source_account: String,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -35,6 +37,8 @@ impl GatewayConfig {
                 .unwrap_or(50052),
             api_url: env_or("STELLAR_API_URL", "http://127.0.0.1:8101"),
             ibc_contract_id: env_or("ROUTER_CONTRACT_ADDRESS", ""),
+            transfer_contract_id: env_or("TRANSFER_CONTRACT_ADDRESS", ""),
+            source_account: env_or("STELLAR_SOURCE_ACCOUNT", ""),
         }
     }
 

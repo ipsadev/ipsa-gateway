@@ -16,18 +16,24 @@ use tonic::{Request, Response, Status};
 #[derive(Clone)]
 pub struct MsgHandler {
     pub api: ApiClient,
+    pub ibc_contract_id: String,
+    pub transfer_contract_id: String,
 }
 
 impl MsgHandler {
-    pub fn new(api: ApiClient) -> Self {
-        Self { api }
+    pub fn new(api: ApiClient, ibc_contract_id: String, transfer_contract_id: String) -> Self {
+        Self {
+            api,
+            ibc_contract_id,
+            transfer_contract_id,
+        }
     }
 
     pub fn into_server(self) -> StellarGatewayMsgServer<Self> {
         StellarGatewayMsgServer::new(self)
     }
 
-    async fn log_wallet_change(&self, packet: &ScVal) {
+    async fn log_wallet_change(&self, packet: &ScVal, source_account: &str) {
         let Some(value_bytes) = first_payload_value(packet) else {
             return;
         };
@@ -45,7 +51,11 @@ impl MsgHandler {
             return;
         };
 
-        match self.api.get_transfer_balance(denom, sender).await {
+        match self
+            .api
+            .get_transfer_balance(&self.transfer_contract_id, source_account, denom, sender)
+            .await
+        {
             Ok(balance) => {
                 tracing::info!(
                     denom,
@@ -69,7 +79,7 @@ impl MsgHandler {
     ) -> Result<Vec<u8>, Status> {
         tracing::debug!(method, signer, args = args.len(), "prepare_router via api");
         self.api
-            .build_unsigned_tx(signer, method, args)
+            .build_unsigned_tx(&self.ibc_contract_id, signer, method, args)
             .await
             .map_err(|error| {
                 tracing::error!(%error, method, "invoke failed");
@@ -270,7 +280,7 @@ impl StellarGatewayMsg for MsgHandler {
             "[cosmos→stellar] AckPacket → router.acknowledge_packet"
         );
         let packet_scval = decode_packet_scval(&req.packet)?;
-        self.log_wallet_change(&packet_scval).await;
+        self.log_wallet_change(&packet_scval, &req.signer).await;
         let acks = scval_vec_of_bytes(&[req.acknowledgement])?;
         let args = vec![
             packet_scval,

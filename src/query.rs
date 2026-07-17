@@ -26,19 +26,34 @@ pub struct QueryHandler {
     pub api: ApiClient,
     pub state: Arc<Mutex<State>>,
     pub ibc_contract_id: Option<String>,
+    pub source_account: String,
 }
 
 impl QueryHandler {
-    pub fn new(api: ApiClient, state: Arc<Mutex<State>>, ibc_contract_id: Option<String>) -> Self {
+    pub fn new(
+        api: ApiClient,
+        state: Arc<Mutex<State>>,
+        ibc_contract_id: Option<String>,
+        source_account: String,
+    ) -> Self {
         Self {
             api,
             state,
             ibc_contract_id,
+            source_account,
         }
     }
 
     pub fn into_server(self) -> StellarGatewayQueryServer<Self> {
         StellarGatewayQueryServer::new(self)
+    }
+
+    fn router(&self) -> &str {
+        self.ibc_contract_id.as_deref().unwrap_or("")
+    }
+
+    fn source(&self) -> &str {
+        self.source_account.as_str()
     }
 }
 
@@ -71,7 +86,7 @@ impl StellarGatewayQuery for QueryHandler {
 
         let xdr = self
             .api
-            .get_client_state_xdr(&req.client_id)
+            .get_client_state_xdr(self.router(), self.source(), &req.client_id)
             .await
             .map_err(|error| Status::internal(format!("get client state: {error}")))?;
 
@@ -97,13 +112,17 @@ impl StellarGatewayQuery for QueryHandler {
 
         let ids = self
             .api
-            .list_client_ids()
+            .list_client_ids(self.router())
             .await
             .map_err(|error| Status::internal(format!("list clients: {error}")))?;
 
         let mut client_states = Vec::new();
         for client_id in ids {
-            let xdr = match self.api.get_client_state_xdr(&client_id).await {
+            let xdr = match self
+                .api
+                .get_client_state_xdr(self.router(), self.source(), &client_id)
+                .await
+            {
                 Ok(xdr) => xdr,
                 Err(error) => {
                     tracing::warn!(%client_id, %error, "skipping client: state fetch failed");
@@ -143,7 +162,12 @@ impl StellarGatewayQuery for QueryHandler {
 
         let xdr = self
             .api
-            .get_consensus_state_xdr(&req.client_id, req.revision_height)
+            .get_consensus_state_xdr(
+                self.router(),
+                self.source(),
+                &req.client_id,
+                req.revision_height,
+            )
             .await
             .map_err(|error| Status::not_found(format!("consensus state fetch failed: {error}")))?;
 
@@ -330,7 +354,11 @@ impl StellarGatewayQuery for QueryHandler {
             if latest >= seq {
                 break;
             }
-            tracing::debug!(sequence = seq, latest, "header ledger not closed yet, waiting");
+            tracing::debug!(
+                sequence = seq,
+                latest,
+                "header ledger not closed yet, waiting"
+            );
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
 

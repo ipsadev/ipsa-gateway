@@ -70,6 +70,8 @@ impl GatewayTest {
             grpc_port: 0,
             api_url,
             ibc_contract_id: id_string,
+            transfer_contract_id: String::new(),
+            source_account: String::new(),
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -49,10 +49,18 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
                 api.clone(),
                 state,
                 Some(cfg.ibc_contract_id.clone()).filter(|s| !s.is_empty()),
+                cfg.source_account.clone(),
             )
             .into_server(),
         )
-        .add_service(MsgHandler::new(api.clone()).into_server())
+        .add_service(
+            MsgHandler::new(
+                api.clone(),
+                cfg.ibc_contract_id.clone(),
+                cfg.transfer_contract_id.clone(),
+            )
+            .into_server(),
+        )
 }
 
 pub async fn serve_with_listener(
