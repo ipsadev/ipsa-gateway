@@ -46,19 +46,17 @@ impl MsgHandler {
         };
 
         match self.api.get_transfer_balance(denom, sender).await {
-            Ok(new_balance) => {
-                let current_balance = new_balance.saturating_add(amount);
+            Ok(balance) => {
                 tracing::info!(
                     denom,
                     sender,
-                    current_balance = %current_balance,
-                    new_balance = %new_balance,
+                    balance = %balance,
                     moved = %amount,
-                    "[cosmos→stellar] wallet settled — sender escrow reflects the transfer"
+                    "[cosmos→stellar] wallet settled — sender balance after transfer (on-chain)"
                 );
             }
             Err(error) => {
-                tracing::debug!(%error, "wallet balance read failed (demo log)");
+                tracing::debug!(%error, "wallet balance read failed");
             }
         }
     }
