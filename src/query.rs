@@ -330,7 +330,11 @@ impl StellarGatewayQuery for QueryHandler {
             if latest >= seq {
                 break;
             }
-            tracing::debug!(sequence = seq, latest, "header ledger not closed yet, waiting");
+            tracing::debug!(
+                sequence = seq,
+                latest,
+                "header ledger not closed yet, waiting"
+            );
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
 
