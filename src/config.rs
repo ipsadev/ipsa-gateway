@@ -7,6 +7,8 @@ pub struct GatewayConfig {
     pub ibc_contract_id: String,
     pub transfer_contract_id: String,
     pub source_account: String,
+    pub stellar_chain_id: String,
+    pub cosmos_chain_id: String,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -39,6 +41,8 @@ impl GatewayConfig {
             ibc_contract_id: env_or("ROUTER_CONTRACT_ADDRESS", ""),
             transfer_contract_id: env_or("TRANSFER_CONTRACT_ADDRESS", ""),
             source_account: env_or("STELLAR_SOURCE_ACCOUNT", ""),
+            stellar_chain_id: env_or("STELLAR_CHAIN_ID", "stellar-testnet"),
+            cosmos_chain_id: env_or("COSMOS_CHAIN_ID", "simd-1"),
         }
     }
 
