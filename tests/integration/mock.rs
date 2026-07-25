@@ -72,6 +72,8 @@ impl GatewayTest {
             ibc_contract_id: id_string,
             transfer_contract_id: String::new(),
             source_account: String::new(),
+            stellar_chain_id: "stellar-testnet".to_string(),
+            cosmos_chain_id: "simd-1".to_string(),
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

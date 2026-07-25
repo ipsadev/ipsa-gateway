@@ -6,7 +6,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::server::Router;
 use tonic::transport::Server;
 
-use crate::{config::GatewayConfig, msg::MsgHandler, query::QueryHandler};
+use crate::{config::GatewayConfig, msg::MsgHandler, query::QueryHandler, relay::RelayHandler};
 use stellar_ibc_core::{api_client::ApiClient, state::State};
 
 async fn build_router(cfg: &GatewayConfig) -> Router {
@@ -58,6 +58,14 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
                 api.clone(),
                 cfg.ibc_contract_id.clone(),
                 cfg.transfer_contract_id.clone(),
+            )
+            .into_server(),
+        )
+        .add_service(
+            RelayHandler::new(
+                cfg.stellar_chain_id.clone(),
+                cfg.cosmos_chain_id.clone(),
+                cfg.ibc_contract_id.clone(),
             )
             .into_server(),
         )
