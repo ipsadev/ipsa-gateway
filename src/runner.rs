@@ -63,9 +63,12 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
         )
         .add_service(
             RelayHandler::new(
+                api.clone(),
                 cfg.stellar_chain_id.clone(),
                 cfg.cosmos_chain_id.clone(),
                 cfg.ibc_contract_id.clone(),
+                cfg.event_lookback_ledgers,
+                cfg.cosmos_signer.clone(),
             )
             .into_server(),
         )
