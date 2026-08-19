@@ -1,6 +1,6 @@
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use stellar_hermes_gateway::{config, runner};
+use interstellar_gateway::{config, runner};
 
 #[tokio::main]
 async fn main() {

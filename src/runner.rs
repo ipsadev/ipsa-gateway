@@ -41,6 +41,13 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
         .build_v1()
         .expect("gRPC reflection service failed to build");
 
+    let header_assembler = Arc::new(crate::header::HeaderAssembler::new(
+        api.clone(),
+        crate::header::Network::from_chain_id(&cfg.stellar_chain_id),
+        ibc_contract_id,
+        crate::header::ROOT_EVENT_TOPIC,
+    ));
+
     Server::builder()
         .add_service(reflection_service)
         .add_service(health_service)
@@ -50,6 +57,7 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
                 state,
                 Some(cfg.ibc_contract_id.clone()).filter(|s| !s.is_empty()),
                 cfg.source_account.clone(),
+                header_assembler.clone(),
             )
             .into_server(),
         )

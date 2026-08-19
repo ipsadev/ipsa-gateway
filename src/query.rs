@@ -12,6 +12,7 @@ use crate::proto::{
     QueryConsensusStateResponse, QueryIbcHeaderRequest, QueryIbcHeaderResponse,
     QueryNextSeqRecvRequest, QueryNextSeqRecvResponse, QueryPacketCommitmentRequest,
     QueryPacketCommitmentResponse, QueryPacketReceiptRequest, QueryPacketReceiptResponse,
+    QueryStellarClientParamsRequest, QueryStellarClientParamsResponse,
 };
 use stellar_ibc_core::{
     api_client::ApiClient,
@@ -27,6 +28,7 @@ pub struct QueryHandler {
     pub state: Arc<Mutex<State>>,
     pub ibc_contract_id: Option<String>,
     pub source_account: String,
+    pub header: Arc<crate::header::HeaderAssembler>,
 }
 
 impl QueryHandler {
@@ -35,8 +37,10 @@ impl QueryHandler {
         state: Arc<Mutex<State>>,
         ibc_contract_id: Option<String>,
         source_account: String,
+        header: Arc<crate::header::HeaderAssembler>,
     ) -> Self {
         Self {
+            header,
             api,
             state,
             ibc_contract_id,
@@ -338,75 +342,72 @@ impl StellarGatewayQuery for QueryHandler {
         request: Request<QueryIbcHeaderRequest>,
     ) -> Result<Response<QueryIbcHeaderResponse>, Status> {
         use prost::Message as _;
-        use soroban_client::xdr::{LedgerHeader, Limits, PublicKey, ReadXdr, StellarValueExt};
 
         let seq = request.into_inner().height as u32;
         tracing::debug!(sequence = seq, "gRPC QueryIbcHeader");
 
-        // A proof for state committed at ledger H is verified against the header at
-        // H+1 (the ledger app-hash lags one ledger), so the requested header ledger
-        // may be latest+1 and not yet closed. Wait for it before fetching.
         for _ in 0..6 {
             let latest = self.api.get_latest_ledger().await.map_err(|error| {
                 tracing::error!(%error, "get_latest_ledger failed (waiting for header ledger)");
                 Status::internal(format!("get_latest_ledger failed: {error}"))
             })?;
-            if latest >= seq {
+            if latest > seq {
                 break;
             }
-            tracing::debug!(
-                sequence = seq,
-                latest,
-                "header ledger not closed yet, waiting"
-            );
+            tracing::debug!(sequence = seq, latest, "waiting for slot N+1 to close");
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
 
-        let ledger = self.api.get_ledger(seq).await.map_err(|error| {
-            tracing::error!(%error, sequence = seq, "get_ledger failed");
-            Status::internal(format!("getLedger failed: {error}"))
-        })?;
-
-        let header = LedgerHeader::from_xdr(&ledger.header_xdr, Limits::none())
-            .map_err(|e| Status::internal(format!("LedgerHeader XDR decode: {e}")))?;
-
-        let scp_value = header.scp_value;
-        let (scp_node_id, scp_signature) = match &scp_value.ext {
-            StellarValueExt::Signed(sig) => {
-                let PublicKey::PublicKeyTypeEd25519(pubkey) = &sig.node_id.0;
-                (pubkey.0.to_vec(), sig.signature.to_vec())
+        let ledger_meta = match self.api.get_ledger(seq).await {
+            Ok(ledger) => ledger.metadata_xdr,
+            Err(error) => {
+                tracing::warn!(%error, sequence = seq, "no ledger meta; header will bind no root");
+                None
             }
-            StellarValueExt::Basic => (vec![], vec![]),
         };
 
-        let mut signed_value_xdr = Vec::with_capacity(40);
-        signed_value_xdr.extend_from_slice(&scp_value.tx_set_hash.0);
-        signed_value_xdr.extend_from_slice(&scp_value.close_time.0.to_be_bytes());
-
-        let ibc_state_root = self
-            .state
-            .lock()
+        let stellar_header = self
+            .header
+            .assemble(seq, ledger_meta.as_deref())
             .await
-            .root_at(seq)
-            .await
-            .map_err(|e| Status::internal(format!("state root computation failed: {e}")))?;
+            .map_err(|error| {
+                tracing::error!(%error, sequence = seq, "header assembly failed");
+                Status::internal(format!("header assembly failed: {error:#}"))
+            })?;
 
-        let stellar_header = crate::proto::StellarHeader {
-            ledger_seq: seq,
-            ledger_header_xdr: ledger.header_xdr,
-            ibc_state_root: ibc_state_root.to_vec(),
-            scp_node_id,
-            scp_signature,
-            signed_value_xdr,
-        };
-
-        let mut header_bytes = vec![];
-        stellar_header
-            .encode(&mut header_bytes)
-            .map_err(|e| Status::internal(format!("StellarHeader encode: {e}")))?;
+        if stellar_header.state_root_proof.is_none() {
+            tracing::debug!(sequence = seq, "no router root in this ledger");
+        }
 
         Ok(Response::new(QueryIbcHeaderResponse {
-            header: header_bytes,
+            header: stellar_header.encode_to_vec(),
+        }))
+    }
+
+    #[tracing::instrument(skip(self, request), name = "grpc.query_stellar_client_params")]
+    async fn query_stellar_client_params(
+        &self,
+        request: Request<QueryStellarClientParamsRequest>,
+    ) -> Result<Response<QueryStellarClientParamsResponse>, Status> {
+        let slot = request.into_inner().height as u32;
+
+        let quorum_configs = self.header.quorum_configs(slot).await.map_err(|error| {
+            tracing::error!(%error, slot, "quorum config fetch failed");
+            Status::internal(format!("quorum config fetch failed: {error:#}"))
+        })?;
+
+        let router_contract_id = match &self.ibc_contract_id {
+            Some(id) => stellar_strkey::Contract::from_string(id)
+                .map(|c| c.0.to_vec())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        Ok(Response::new(QueryStellarClientParamsResponse {
+            quorum_configs,
+            network_id: self.header.network().network_id().to_vec(),
+            router_contract_id,
+            root_event_topic: crate::header::ROOT_EVENT_TOPIC.to_vec(),
         }))
     }
 

@@ -1,10 +1,10 @@
 use crate::proto::{
     stellar_gateway_msg_server::{StellarGatewayMsg, StellarGatewayMsgServer},
-    MsgAckPacketRequest, MsgAckPacketResponse, MsgCreateClientRequest, MsgCreateClientResponse,
-    MsgRecvPacketRequest, MsgRecvPacketResponse, MsgRegisterCounterpartyRequest,
-    MsgRegisterCounterpartyResponse, MsgSubmitMisbehaviourRequest, MsgSubmitMisbehaviourResponse,
-    MsgTimeoutPacketRequest, MsgTimeoutPacketResponse, MsgUpdateClientRequest,
-    MsgUpdateClientResponse, SubmitSignedTxRequest, SubmitSignedTxResponse,
+    MsgAckPacketRequest, MsgAckPacketResponse, MsgCommitRootRequest, MsgCommitRootResponse,
+    MsgCreateClientRequest, MsgCreateClientResponse, MsgRecvPacketRequest, MsgRecvPacketResponse,
+    MsgRegisterCounterpartyRequest, MsgRegisterCounterpartyResponse, MsgSubmitMisbehaviourRequest,
+    MsgSubmitMisbehaviourResponse, MsgTimeoutPacketRequest, MsgTimeoutPacketResponse,
+    MsgUpdateClientRequest, MsgUpdateClientResponse, SubmitSignedTxRequest, SubmitSignedTxResponse,
 };
 use soroban_client::xdr::ScVal;
 use stellar_ibc_core::api_client::ApiClient;
@@ -266,6 +266,19 @@ impl StellarGatewayMsg for MsgHandler {
             .prepare_msg_tx(&req.signer, "recv_packet", args)
             .await?;
         Ok(Response::new(MsgRecvPacketResponse { tx_xdr }))
+    }
+
+    #[tracing::instrument(skip(self, request), name = "grpc.commit_root")]
+    async fn commit_root(
+        &self,
+        request: Request<MsgCommitRootRequest>,
+    ) -> Result<Response<MsgCommitRootResponse>, Status> {
+        let req = request.into_inner();
+        tracing::info!("[gateway] CommitRoot — republishing the provable-store root");
+        let tx_xdr = self
+            .prepare_msg_tx(&req.signer, "commit_root", vec![])
+            .await?;
+        Ok(Response::new(MsgCommitRootResponse { tx_xdr }))
     }
 
     #[tracing::instrument(skip(self, request), name = "grpc.ack_packet")]
