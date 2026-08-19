@@ -3,7 +3,7 @@ use serde_json::json;
 use soroban_client::xdr::{LedgerHeader, Limits, ScVal, WriteXdr};
 use tonic::Code;
 
-use stellar_hermes_gateway::proto::{
+use interstellar_gateway::proto::{
     EventsRequest, LatestHeightRequest, QueryAcknowledgementRequest, QueryClientStateRequest,
     QueryClientStatesRequest, QueryConsensusStateRequest, QueryIbcHeaderRequest,
     QueryNextSeqRecvRequest, QueryPacketCommitmentRequest, QueryPacketReceiptRequest,
@@ -325,21 +325,74 @@ async fn state_reflects_contract_write_as_membership_proof() {
 }
 
 #[tokio::test]
-async fn query_ibc_header_encodes_stellar_header() {
+async fn query_ibc_header_assembles_scp_evidence() {
+    use prost::Message as _;
+
+    const LEDGER: u32 = 4_160_600;
+    let archive = crate::archive_fixture::archive_responses(LEDGER);
+    let envelope_count = archive.envelope_count;
+    let ledger_hash = archive.ledger_hash;
+
     let t = GatewayTest::start(None).await;
-    let header_xdr = LedgerHeader::default().to_xdr(Limits::none()).unwrap();
     t.with_data(|d| {
-        d.ledgers.insert(5, (header_xdr, None));
+        d.latest_ledger = LEDGER + 2; // slot N+1 must have closed
+        d.archive_scp = archive.scp;
+        d.archive_headers = archive.headers;
+        d.archive_tx_sets = archive.tx_sets;
     });
 
     let resp = t
         .query()
-        .query_ibc_header(QueryIbcHeaderRequest { height: 5 })
+        .query_ibc_header(QueryIbcHeaderRequest {
+            height: LEDGER as u64,
+        })
         .await
         .unwrap()
         .into_inner();
 
-    assert!(!resp.header.is_empty());
+    let header = interstellar_gateway::proto::StellarHeader::decode(resp.header.as_slice())
+        .expect("a StellarHeader the light client can decode");
+
+    assert_eq!(header.slot_index, LEDGER as u64);
+    assert_eq!(header.scp_envelopes.len(), envelope_count);
+    assert_eq!(
+        header.next_scp_envelopes.len(),
+        envelope_count,
+        "slot N+1's envelopes are what bind the parts of the header SCP does \
+         not sign"
+    );
+    assert_eq!(header.quorum_sets_xdr.len(), 1);
+
+    assert_eq!(
+        &header.next_tx_set_xdr[4..36],
+        &ledger_hash,
+        "the next slot's tx set must follow this ledger"
+    );
+
+    assert!(header.state_root_proof.is_none());
+}
+
+#[tokio::test]
+async fn query_ibc_header_fails_diagnosably_without_archive_evidence() {
+    let t = GatewayTest::start(None).await;
+    let header_xdr = LedgerHeader::default().to_xdr(Limits::none()).unwrap();
+    t.with_data(|d| {
+        d.latest_ledger = 7;
+        d.ledgers.insert(5, (header_xdr, None));
+    });
+
+    let err = t
+        .query()
+        .query_ibc_header(QueryIbcHeaderRequest { height: 5 })
+        .await
+        .expect_err("no archived SCP evidence for this ledger");
+
+    assert_eq!(err.code(), tonic::Code::Internal);
+    assert!(
+        err.message().contains("header assembly failed"),
+        "the error must name the stage that failed, got: {}",
+        err.message()
+    );
 }
 
 #[tokio::test]

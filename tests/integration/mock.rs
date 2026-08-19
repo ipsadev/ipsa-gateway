@@ -26,10 +26,10 @@ use ibc_proto::ibc::lightclients::tendermint::v1::{
     ClientState as RawTmClientState, ConsensusState as RawTmConsensusState, Fraction,
 };
 
-use stellar_hermes_gateway::config::GatewayConfig;
-use stellar_hermes_gateway::proto::stellar_gateway_msg_client::StellarGatewayMsgClient;
-use stellar_hermes_gateway::proto::stellar_gateway_query_client::StellarGatewayQueryClient;
-use stellar_hermes_gateway::runner;
+use interstellar_gateway::config::GatewayConfig;
+use interstellar_gateway::proto::stellar_gateway_msg_client::StellarGatewayMsgClient;
+use interstellar_gateway::proto::stellar_gateway_query_client::StellarGatewayQueryClient;
+use interstellar_gateway::runner;
 use stellar_ibc_core::conversion::{scval_bytes, scval_struct};
 
 pub struct PrepareCall {
@@ -50,6 +50,9 @@ pub struct MockData {
     pub events: Vec<Value>,
     pub prepare_calls: Vec<PrepareCall>,
     pub submit_calls: Vec<String>,
+    pub archive_scp: HashMap<u32, Value>,
+    pub archive_headers: HashMap<u32, Value>,
+    pub archive_tx_sets: HashMap<u32, Value>,
 }
 
 pub struct GatewayTest {
@@ -129,6 +132,12 @@ async fn start_mock_api() -> (String, Arc<Mutex<MockData>>) {
         .route("/tx/prepare", post(tx_prepare))
         .route("/tx/submit", post(tx_submit))
         .route("/events", get(events))
+        .route("/archive/scp/{ledger}", get(archive_scp))
+        .route(
+            "/archive/ledger-header/{ledger}",
+            get(archive_ledger_header),
+        )
+        .route("/archive/tx-set/{ledger}", get(archive_tx_set))
         .route("/stellar/clients", get(list_clients))
         .route("/stellar/clients/{id}/state", get(client_state))
         .route(
@@ -367,4 +376,42 @@ pub fn tm_consensus_state_protobuf() -> Vec<u8> {
     };
     let cons = TmConsensusState::try_from(raw).unwrap();
     Protobuf::<RawTmConsensusState>::encode_vec(cons)
+}
+
+fn archive_lookup(
+    found: Option<Value>,
+    what: &str,
+    ledger: u32,
+) -> (axum::http::StatusCode, Json<Value>) {
+    match found {
+        Some(body) => (axum::http::StatusCode::OK, Json(body)),
+        None => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("no {what} for ledger {ledger}") })),
+        ),
+    }
+}
+
+async fn archive_scp(
+    AxState(data): AxState<Arc<Mutex<MockData>>>,
+    Path(ledger): Path<u32>,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let found = data.lock().unwrap().archive_scp.get(&ledger).cloned();
+    archive_lookup(found, "SCP messages", ledger)
+}
+
+async fn archive_ledger_header(
+    AxState(data): AxState<Arc<Mutex<MockData>>>,
+    Path(ledger): Path<u32>,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let found = data.lock().unwrap().archive_headers.get(&ledger).cloned();
+    archive_lookup(found, "ledger header", ledger)
+}
+
+async fn archive_tx_set(
+    AxState(data): AxState<Arc<Mutex<MockData>>>,
+    Path(ledger): Path<u32>,
+) -> (axum::http::StatusCode, Json<Value>) {
+    let found = data.lock().unwrap().archive_tx_sets.get(&ledger).cloned();
+    archive_lookup(found, "generalized tx set", ledger)
 }

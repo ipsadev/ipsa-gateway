@@ -1,7 +1,7 @@
 use soroban_client::xdr::ScVal;
 use tonic::Code;
 
-use stellar_hermes_gateway::proto::{
+use interstellar_gateway::proto::{
     MsgAckPacketRequest, MsgCreateClientRequest, MsgRecvPacketRequest,
     MsgRegisterCounterpartyRequest, MsgSubmitMisbehaviourRequest, MsgTimeoutPacketRequest,
     MsgUpdateClientRequest, SubmitSignedTxRequest,
