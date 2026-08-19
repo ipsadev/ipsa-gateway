@@ -1,5 +1,5 @@
 [package]
-name = "stellar-hermes-gateway"
+name = "interstellar-gateway"
 version = "0.1.0"
 edition = { workspace = true }
 license = { workspace = true }
@@ -8,7 +8,7 @@ rust-version = { workspace = true }
 description = ""
 
 [[bin]]
-name = "stellar-gateway"
+name = "interstellar-gateway"
 path = "src/main.rs"
 
 [dependencies]
