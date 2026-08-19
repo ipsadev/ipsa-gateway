@@ -1,6 +1,9 @@
 use ibc::primitives::proto::{Any, Protobuf};
+use prost::Message as _;
 use serde_json::json;
-use soroban_client::xdr::{LedgerHeader, Limits, ScVal, WriteXdr};
+use soroban_client::xdr::{
+    InvokeHostFunctionSuccessPreImage, LedgerHeader, Limits, ReadXdr, ScVal, WriteXdr,
+};
 use tonic::Code;
 
 use interstellar_gateway::proto::{
@@ -16,7 +19,7 @@ use stellar_ibc_core::conversion::{
 };
 use stellar_ibc_core::ibc::client_state::AnyClientState;
 
-use super::mock::{ledger_meta_with_write, GatewayTest};
+use super::mock::{ledger_meta_with_invocations, ledger_meta_with_write, root_event, GatewayTest};
 
 fn sample_client_state_xdr() -> Vec<u8> {
     let trust_level = scval_struct(vec![
@@ -326,8 +329,6 @@ async fn state_reflects_contract_write_as_membership_proof() {
 
 #[tokio::test]
 async fn query_ibc_header_assembles_scp_evidence() {
-    use prost::Message as _;
-
     const LEDGER: u32 = 4_160_600;
     let archive = crate::archive_fixture::archive_responses(LEDGER);
     let envelope_count = archive.envelope_count;
@@ -368,6 +369,126 @@ async fn query_ibc_header_assembles_scp_evidence() {
         &ledger_hash,
         "the next slot's tx set must follow this ledger"
     );
+
+    assert!(header.state_root_proof.is_none());
+}
+
+const ROUTER: [u8; 32] = [7u8; 32];
+const ROOT: [u8; 32] = [42u8; 32];
+
+async fn header_with_meta(meta: Vec<u8>) -> interstellar_gateway::proto::StellarHeader {
+    const LEDGER: u32 = 4_160_600;
+    let archive = crate::archive_fixture::archive_responses(LEDGER);
+
+    let t = GatewayTest::start(Some(ROUTER)).await;
+    t.with_data(|d| {
+        d.latest_ledger = LEDGER + 2;
+        d.archive_scp = archive.scp;
+        d.archive_headers = archive.headers;
+        d.archive_tx_sets = archive.tx_sets;
+        d.ledgers.insert(LEDGER, (Vec::new(), Some(meta)));
+    });
+
+    let resp = t
+        .query()
+        .query_ibc_header(QueryIbcHeaderRequest {
+            height: LEDGER as u64,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    interstellar_gateway::proto::StellarHeader::decode(resp.header.as_slice()).unwrap()
+}
+
+fn root_in(proof: &interstellar_gateway::proto::StateRootProof) -> Vec<u8> {
+    let preimage =
+        InvokeHostFunctionSuccessPreImage::from_xdr(&proof.success_preimage_xdr, Limits::none())
+            .expect("the preimage the result committed to");
+
+    let event = preimage
+        .events
+        .iter()
+        .find(|e| e.contract_id.as_ref().is_some_and(|id| id.0 .0 == ROUTER))
+        .expect("an event from the router");
+
+    let soroban_client::xdr::ContractEventBody::V0(body) = &event.body;
+    match &body.data {
+        ScVal::Bytes(bytes) => bytes.0.to_vec(),
+        other => panic!("the root must be bytes, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn state_root_proof_binds_a_single_router_invocation() {
+    let meta = ledger_meta_with_invocations(&[Some(vec![root_event(ROUTER, "ibc_root", ROOT)])]);
+
+    let header = header_with_meta(meta).await;
+
+    let proof = header
+        .state_root_proof
+        .expect("the router emitted a root in this ledger");
+    assert_eq!(proof.result_index, 0);
+    assert_eq!(proof.result_pairs.len(), 1);
+    assert_eq!(root_in(&proof), ROOT.to_vec());
+}
+
+#[tokio::test]
+async fn state_root_proof_points_at_the_router_among_other_invocations() {
+    let other = [3u8; 32];
+    let meta = ledger_meta_with_invocations(&[
+        None,
+        Some(vec![root_event(other, "ibc_root", [1u8; 32])]),
+        Some(vec![root_event(ROUTER, "ibc_root", ROOT)]),
+        Some(vec![root_event(other, "transfer", [2u8; 32])]),
+    ]);
+
+    let header = header_with_meta(meta).await;
+
+    let proof = header
+        .state_root_proof
+        .expect("one of the invocations is the router's");
+    assert_eq!(
+        proof.result_index, 2,
+        "the index must name the router's own result, not another contract's"
+    );
+    assert_eq!(
+        proof.result_pairs.len(),
+        4,
+        "the whole result set travels with the header so txSetResultHash can be reproduced"
+    );
+    assert_eq!(root_in(&proof), ROOT.to_vec());
+}
+
+#[tokio::test]
+async fn state_root_proof_is_absent_without_a_router_event() {
+    let other = [3u8; 32];
+    let meta =
+        ledger_meta_with_invocations(&[None, Some(vec![root_event(other, "ibc_root", [1u8; 32])])]);
+
+    let header = header_with_meta(meta).await;
+
+    assert!(
+        header.state_root_proof.is_none(),
+        "a ledger with no router root must bind no root rather than fail"
+    );
+}
+
+#[tokio::test]
+async fn state_root_proof_ignores_a_router_event_with_another_topic() {
+    let meta = ledger_meta_with_invocations(&[Some(vec![root_event(ROUTER, "transfer", ROOT)])]);
+
+    let header = header_with_meta(meta).await;
+
+    assert!(
+        header.state_root_proof.is_none(),
+        "only the configured root event topic may carry the state root"
+    );
+}
+
+#[tokio::test]
+async fn state_root_proof_is_absent_when_no_transaction_ran() {
+    let header = header_with_meta(ledger_meta_with_invocations(&[])).await;
 
     assert!(header.state_root_proof.is_none());
 }

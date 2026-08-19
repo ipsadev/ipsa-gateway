@@ -1,8 +1,9 @@
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
-    ContractEvent, ContractEventBody, InvokeHostFunctionSuccessPreImage, LedgerCloseMeta, Limits,
-    ReadXdr, ScVal, TransactionMeta, TransactionResultPair, WriteXdr,
+    ContractEvent, ContractEventBody, InvokeHostFunctionResult, InvokeHostFunctionSuccessPreImage,
+    LedgerCloseMeta, Limits, OperationResult, OperationResultTr, ReadXdr, ScVal, TransactionMeta,
+    TransactionResultPair, TransactionResultResult, WriteXdr,
 };
 use stellar_ibc_core::api_client::ApiClient;
 
@@ -257,10 +258,6 @@ fn soroban_parts(meta: &TransactionMeta) -> Option<(ScVal, Vec<ContractEvent>)> 
 fn invocation_success_hash(pair_xdr: &[u8]) -> Result<[u8; 32]> {
     let pair = TransactionResultPair::from_xdr(pair_xdr, Limits::none())
         .map_err(|e| anyhow!("TransactionResultPair decode: {e}"))?;
-
-    use soroban_client::xdr::{
-        InvokeHostFunctionResult, OperationResult, OperationResultTr, TransactionResultResult,
-    };
 
     let TransactionResultResult::TxSuccess(ops) = &pair.result.result else {
         bail!("the referenced transaction did not succeed");

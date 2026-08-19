@@ -6,11 +6,17 @@ use axum::extract::{Path, State as AxState};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
-    ContractDataDurability, ContractDataEntry, ContractId, ExtensionPoint, Hash, LedgerCloseMeta,
-    LedgerCloseMetaV0, LedgerEntry, LedgerEntryChange, LedgerEntryChanges, LedgerEntryData,
-    LedgerEntryExt, Limits, OperationMeta, ScVal, TransactionMeta, TransactionMetaV1,
-    TransactionResultMeta, VecM, WriteXdr,
+    ContractDataDurability, ContractDataEntry, ContractEvent, ContractEventBody, ContractEventType,
+    ContractEventV0, ContractId, ExtensionPoint, Hash, InvokeHostFunctionResult,
+    InvokeHostFunctionSuccessPreImage, LedgerCloseMeta, LedgerCloseMetaExt, LedgerCloseMetaV0,
+    LedgerCloseMetaV2, LedgerEntry, LedgerEntryChange, LedgerEntryChanges, LedgerEntryData,
+    LedgerEntryExt, Limits, OperationMeta, OperationMetaV2, OperationResult, OperationResultTr,
+    ScSymbol, ScVal, SorobanTransactionMetaExt, SorobanTransactionMetaV2, StringM, TransactionMeta,
+    TransactionMetaV1, TransactionMetaV4, TransactionResult, TransactionResultExt,
+    TransactionResultMeta, TransactionResultMetaV1, TransactionResultPair, TransactionResultResult,
+    VecM, WriteXdr,
 };
 use tokio::net::TcpListener;
 use tonic::transport::Channel;
@@ -321,6 +327,114 @@ pub fn ledger_meta_with_write(contract: [u8; 32], key: Vec<u8>, val: Vec<u8>) ->
         scp_info: VecM::default(),
     };
     LedgerCloseMeta::V0(v0).to_xdr(Limits::none()).unwrap()
+}
+
+pub fn root_event(contract: [u8; 32], topic: &str, root: [u8; 32]) -> ContractEvent {
+    ContractEvent {
+        ext: ExtensionPoint::V0,
+        contract_id: Some(ContractId(Hash(contract))),
+        type_: ContractEventType::Contract,
+        body: ContractEventBody::V0(ContractEventV0 {
+            topics: vec![ScVal::Symbol(ScSymbol(
+                topic.parse::<StringM<32>>().unwrap(),
+            ))]
+            .try_into()
+            .unwrap(),
+            data: scval_bytes(&root).unwrap(),
+        }),
+    }
+}
+
+fn success_result(events: &[ContractEvent]) -> TransactionResultPair {
+    let preimage = InvokeHostFunctionSuccessPreImage {
+        return_value: ScVal::Void,
+        events: events.to_vec().try_into().unwrap(),
+    };
+    let hash: [u8; 32] = Sha256::digest(preimage.to_xdr(Limits::none()).unwrap()).into();
+
+    TransactionResultPair {
+        transaction_hash: Hash([0u8; 32]),
+        result: TransactionResult {
+            fee_charged: 100,
+            result: TransactionResultResult::TxSuccess(
+                vec![OperationResult::OpInner(
+                    OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Success(Hash(
+                        hash,
+                    ))),
+                )]
+                .try_into()
+                .unwrap(),
+            ),
+            ext: TransactionResultExt::V0,
+        },
+    }
+}
+
+fn classic_result() -> TransactionResultPair {
+    TransactionResultPair {
+        transaction_hash: Hash([9u8; 32]),
+        result: TransactionResult {
+            fee_charged: 100,
+            result: TransactionResultResult::TxSuccess(VecM::default()),
+            ext: TransactionResultExt::V0,
+        },
+    }
+}
+
+pub fn ledger_meta_with_invocations(invocations: &[Option<Vec<ContractEvent>>]) -> Vec<u8> {
+    let mut tx_processing = Vec::new();
+    for invocation in invocations {
+        let (result, meta) = match invocation {
+            Some(events) => {
+                let meta = TransactionMeta::V4(TransactionMetaV4 {
+                    ext: ExtensionPoint::V0,
+                    tx_changes_before: LedgerEntryChanges(VecM::default()),
+                    operations: vec![OperationMetaV2 {
+                        ext: ExtensionPoint::V0,
+                        changes: LedgerEntryChanges(VecM::default()),
+                        events: events.clone().try_into().unwrap(),
+                    }]
+                    .try_into()
+                    .unwrap(),
+                    tx_changes_after: LedgerEntryChanges(VecM::default()),
+                    soroban_meta: Some(SorobanTransactionMetaV2 {
+                        ext: SorobanTransactionMetaExt::V0,
+                        return_value: Some(ScVal::Void),
+                    }),
+                    events: VecM::default(),
+                    diagnostic_events: VecM::default(),
+                });
+                (success_result(events), meta)
+            }
+            None => (
+                classic_result(),
+                TransactionMeta::V1(TransactionMetaV1 {
+                    tx_changes: LedgerEntryChanges(VecM::default()),
+                    operations: VecM::default(),
+                }),
+            ),
+        };
+
+        tx_processing.push(TransactionResultMetaV1 {
+            ext: ExtensionPoint::V0,
+            result,
+            fee_processing: LedgerEntryChanges(VecM::default()),
+            tx_apply_processing: meta,
+            post_tx_apply_fee_processing: LedgerEntryChanges(VecM::default()),
+        });
+    }
+
+    let v2 = LedgerCloseMetaV2 {
+        ext: LedgerCloseMetaExt::V0,
+        ledger_header: Default::default(),
+        tx_set: Default::default(),
+        tx_processing: tx_processing.try_into().unwrap(),
+        upgrades_processing: VecM::default(),
+        scp_info: VecM::default(),
+        total_byte_size_of_live_soroban_state: 0,
+        evicted_keys: VecM::default(),
+    };
+    LedgerCloseMeta::V2(v2).to_xdr(Limits::none()).unwrap()
 }
 
 pub const FIXTURE_CHAIN_ID: &str = "testchain-1";
