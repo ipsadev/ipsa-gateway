@@ -54,7 +54,7 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
         .add_service(
             QueryHandler::new(
                 api.clone(),
-                state,
+                state.clone(),
                 Some(cfg.ibc_contract_id.clone()).filter(|s| !s.is_empty()),
                 cfg.source_account.clone(),
                 header_assembler.clone(),
@@ -72,6 +72,7 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
         .add_service(
             RelayHandler::new(
                 api.clone(),
+                state,
                 cfg.stellar_chain_id.clone(),
                 cfg.cosmos_chain_id.clone(),
                 cfg.ibc_contract_id.clone(),
