@@ -346,38 +346,10 @@ impl StellarGatewayQuery for QueryHandler {
         let seq = request.into_inner().height as u32;
         tracing::debug!(sequence = seq, "gRPC QueryIbcHeader");
 
-        for _ in 0..6 {
-            let latest = self.api.get_latest_ledger().await.map_err(|error| {
-                tracing::error!(%error, "get_latest_ledger failed (waiting for header ledger)");
-                Status::internal(format!("get_latest_ledger failed: {error}"))
-            })?;
-            if latest > seq {
-                break;
-            }
-            tracing::debug!(sequence = seq, latest, "waiting for slot N+1 to close");
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
-
-        let ledger_meta = match self.api.get_ledger(seq).await {
-            Ok(ledger) => ledger.metadata_xdr,
-            Err(error) => {
-                tracing::warn!(%error, sequence = seq, "no ledger meta; header will bind no root");
-                None
-            }
-        };
-
-        let stellar_header = self
-            .header
-            .assemble(seq, ledger_meta.as_deref())
-            .await
-            .map_err(|error| {
-                tracing::error!(%error, sequence = seq, "header assembly failed");
-                Status::internal(format!("header assembly failed: {error:#}"))
-            })?;
-
-        if stellar_header.state_root_proof.is_none() {
-            tracing::debug!(sequence = seq, "no router root in this ledger");
-        }
+        let stellar_header = self.header.assemble_at(seq).await.map_err(|error| {
+            tracing::error!(%error, sequence = seq, "header assembly failed");
+            Status::internal(format!("header assembly failed: {error:#}"))
+        })?;
 
         Ok(Response::new(QueryIbcHeaderResponse {
             header: stellar_header.encode_to_vec(),

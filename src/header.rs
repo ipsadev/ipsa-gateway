@@ -99,6 +99,32 @@ impl HeaderAssembler {
         })
     }
 
+    pub async fn assemble_at(&self, slot: u32) -> Result<StellarHeader> {
+        for _ in 0..6 {
+            let latest = self.api.get_latest_ledger().await?;
+            if latest > slot {
+                break;
+            }
+            tracing::debug!(slot, latest, "waiting for slot N+1 to close");
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+
+        let ledger_meta = match self.api.get_ledger(slot).await {
+            Ok(ledger) => ledger.metadata_xdr,
+            Err(error) => {
+                tracing::warn!(%error, slot, "no ledger meta; header will bind no root");
+                None
+            }
+        };
+
+        let header = self.assemble(slot, ledger_meta.as_deref()).await?;
+        if header.state_root_proof.is_none() {
+            tracing::debug!(slot, "no router root in this ledger");
+        }
+
+        Ok(header)
+    }
+
     fn state_root_proof(&self, ledger_meta: &[u8]) -> Result<Option<StateRootProof>> {
         let meta = LedgerCloseMeta::from_xdr(ledger_meta, Limits::none())
             .map_err(|e| anyhow!("LedgerCloseMeta decode: {e}"))?;

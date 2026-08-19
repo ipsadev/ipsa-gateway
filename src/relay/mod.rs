@@ -3,12 +3,13 @@ pub mod events;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use prost::Message as _;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use stellar_ibc_core::api_client::ApiClient;
 use stellar_ibc_core::commitment::{ack_commitment_path, packet_commitment_path};
-use stellar_ibc_core::ibc::msg;
+use stellar_ibc_core::ibc::msg::{self, ProtoAny};
 use stellar_ibc_core::ibc::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
 use stellar_ibc_core::ibc::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket};
 use stellar_ibc_core::state::{PathLookup, State};
@@ -24,6 +25,7 @@ const IBC_VERSION: &str = "2";
 pub struct RelayHandler {
     api: ApiClient,
     state: Arc<Mutex<State>>,
+    header: Arc<crate::header::HeaderAssembler>,
     stellar_chain_id: String,
     cosmos_chain_id: String,
     ibc_contract_id: String,
@@ -35,6 +37,7 @@ impl RelayHandler {
     pub fn new(
         api: ApiClient,
         state: Arc<Mutex<State>>,
+        header: Arc<crate::header::HeaderAssembler>,
         stellar_chain_id: String,
         cosmos_chain_id: String,
         ibc_contract_id: String,
@@ -44,6 +47,7 @@ impl RelayHandler {
         Self {
             api,
             state,
+            header,
             stellar_chain_id,
             cosmos_chain_id,
             ibc_contract_id,
@@ -138,6 +142,31 @@ impl RelayHandler {
 
         Ok((recv, ack))
     }
+
+    async fn update_for(&self, client_id: &str, ledger: u32) -> Result<ProtoAny, Status> {
+        if client_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "dst_client_id is required to build the client update",
+            ));
+        }
+
+        let header = self.header.assemble_at(ledger).await.map_err(|error| {
+            tracing::error!(%error, ledger, "header assembly failed");
+            Status::internal(format!("header assembly failed: {error:#}"))
+        })?;
+
+        if header.state_root_proof.is_none() {
+            return Err(Status::failed_precondition(format!(
+                "ledger {ledger} carries no router state root; proofs at this height cannot be verified"
+            )));
+        }
+
+        Ok(msg::update_client_msg(
+            client_id,
+            msg::wasm_client_message(header.encode_to_vec()),
+            &self.cosmos_signer,
+        ))
+    }
 }
 
 fn filter_sequences(events: Vec<PacketEvent>, src: &[u64], dst: &[u64]) -> Vec<PacketEvent> {
@@ -226,6 +255,7 @@ impl ProofApiService for RelayHandler {
         };
 
         let (recv, ack) = self.stellar_messages(&packets, ledger).await?;
+        let update = self.update_for(&req.dst_client_id, ledger).await?;
 
         tracing::debug!(
             src_chain = %req.src_chain,
@@ -238,7 +268,7 @@ impl ProofApiService for RelayHandler {
             "relay_by_tx built cosmos messages"
         );
 
-        let tx = msg::encode_tx_body(None, recv, ack);
+        let tx = msg::encode_tx_body(Some(update), recv, ack);
 
         Ok(Response::new(RelayByTxResponse {
             tx,
