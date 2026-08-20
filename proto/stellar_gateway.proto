@@ -161,6 +161,12 @@ message StellarClientState {
   bytes  root_event_topic              = 9;
 }
 
+message StellarConsensusState {
+  uint64 timestamp   = 1;
+  bytes  ledger_hash = 2;
+  bytes  root        = 3;
+}
+
 message QueryStellarClientParamsRequest {
   uint64 height = 1;
 }

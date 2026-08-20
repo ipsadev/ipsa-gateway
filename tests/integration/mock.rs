@@ -33,6 +33,7 @@ use ibc_proto::ibc::lightclients::tendermint::v1::{
 };
 
 use interstellar_gateway::config::GatewayConfig;
+use interstellar_gateway::proto::proofapi::proof_api_service_client::ProofApiServiceClient;
 use interstellar_gateway::proto::stellar_gateway_msg_client::StellarGatewayMsgClient;
 use interstellar_gateway::proto::stellar_gateway_query_client::StellarGatewayQueryClient;
 use interstellar_gateway::runner;
@@ -65,6 +66,7 @@ pub struct GatewayTest {
     data: Arc<Mutex<MockData>>,
     msg: StellarGatewayMsgClient<Channel>,
     query: StellarGatewayQueryClient<Channel>,
+    relay: ProofApiServiceClient<Channel>,
 }
 
 impl GatewayTest {
@@ -98,7 +100,8 @@ impl GatewayTest {
         Self {
             data,
             msg: StellarGatewayMsgClient::new(channel.clone()),
-            query: StellarGatewayQueryClient::new(channel),
+            query: StellarGatewayQueryClient::new(channel.clone()),
+            relay: ProofApiServiceClient::new(channel),
         }
     }
 
@@ -108,6 +111,10 @@ impl GatewayTest {
 
     pub fn query(&self) -> StellarGatewayQueryClient<Channel> {
         self.query.clone()
+    }
+
+    pub fn relay(&self) -> ProofApiServiceClient<Channel> {
+        self.relay.clone()
     }
 
     pub fn with_data<R>(&self, f: impl FnOnce(&mut MockData) -> R) -> R {

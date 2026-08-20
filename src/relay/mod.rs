@@ -4,6 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use prost::Message as _;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use soroban_client::xdr::{LedgerHeader, Limits, ReadXdr};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
@@ -19,8 +22,19 @@ use crate::proto::proofapi::{
     Chain, CreateClientRequest, CreateClientResponse, InfoRequest, InfoResponse, RelayByTxRequest,
     RelayByTxResponse, UpdateClientRequest, UpdateClientResponse,
 };
+use crate::proto::{
+    Height as WireHeight, QuorumConfig, StellarClientState, StellarConsensusState, StellarHeader,
+};
 
 const IBC_VERSION: &str = "2";
+const DEFAULT_TRUSTING_PERIOD: u64 = 14 * 24 * 60 * 60;
+
+#[derive(Deserialize)]
+struct ParamQuorumConfig {
+    quorum_set_xdr: String,
+    #[serde(default)]
+    valid_from: u64,
+}
 
 pub struct RelayHandler {
     api: ApiClient,
@@ -143,6 +157,39 @@ impl RelayHandler {
         Ok((recv, ack))
     }
 
+    fn router_contract_id(&self) -> Result<[u8; 32], Status> {
+        stellar_strkey::Contract::from_string(&self.ibc_contract_id)
+            .map(|c| c.0)
+            .map_err(|error| {
+                Status::failed_precondition(format!(
+                    "ROUTER_CONTRACT_ADDRESS is not a contract strkey: {error}"
+                ))
+            })
+    }
+
+    async fn consensus_state_at(
+        &self,
+        slot: u32,
+        header: &StellarHeader,
+    ) -> Result<StellarConsensusState, Status> {
+        let decoded = LedgerHeader::from_xdr(&header.ledger_header_xdr, Limits::none())
+            .map_err(|e| Status::internal(format!("ledger header decode: {e}")))?;
+
+        let root = self
+            .state
+            .lock()
+            .await
+            .root_at(slot)
+            .await
+            .map_err(|error| Status::internal(format!("root_at failed: {error}")))?;
+
+        Ok(StellarConsensusState {
+            timestamp: decoded.scp_value.close_time.0,
+            ledger_hash: Sha256::digest(&header.ledger_header_xdr).to_vec(),
+            root: root.to_vec(),
+        })
+    }
+
     async fn update_for(&self, client_id: &str, ledger: u32) -> Result<ProtoAny, Status> {
         if client_id.is_empty() {
             return Err(Status::invalid_argument(
@@ -166,6 +213,62 @@ impl RelayHandler {
             msg::wasm_client_message(header.encode_to_vec()),
             &self.cosmos_signer,
         ))
+    }
+}
+
+fn quorum_configs_from(parameters: &HashMap<String, String>) -> Result<Vec<QuorumConfig>, Status> {
+    let raw = parameters.get("quorum_configs").ok_or_else(|| {
+        Status::invalid_argument(
+            "parameters.quorum_configs is required; the trust root is an operator decision and \
+             the gateway is untrusted transport",
+        )
+    })?;
+
+    let parsed: Vec<ParamQuorumConfig> = serde_json::from_str(raw)
+        .map_err(|e| Status::invalid_argument(format!("parameters.quorum_configs: {e}")))?;
+
+    if parsed.is_empty() {
+        return Err(Status::invalid_argument(
+            "parameters.quorum_configs is empty; refusing to create a client with no trust root",
+        ));
+    }
+
+    let mut configs = Vec::with_capacity(parsed.len());
+    let mut seen: Vec<u64> = Vec::with_capacity(parsed.len());
+    for entry in parsed {
+        if seen.contains(&entry.valid_from) {
+            return Err(Status::invalid_argument(format!(
+                "two quorum configurations claim valid_from {}; the trust root would be chosen \
+                 by list order",
+                entry.valid_from
+            )));
+        }
+        seen.push(entry.valid_from);
+
+        let quorum_set_xdr = hex::decode(entry.quorum_set_xdr.trim()).map_err(|e| {
+            Status::invalid_argument(format!("parameters.quorum_configs quorum_set_xdr: {e}"))
+        })?;
+
+        configs.push(QuorumConfig {
+            quorum_set_xdr,
+            valid_from: entry.valid_from,
+        });
+    }
+
+    Ok(configs)
+}
+
+fn parameter_u64(
+    parameters: &HashMap<String, String>,
+    key: &str,
+    default: u64,
+) -> Result<u64, Status> {
+    match parameters.get(key) {
+        None => Ok(default),
+        Some(raw) => raw
+            .trim()
+            .parse()
+            .map_err(|e| Status::invalid_argument(format!("parameters.{key}: {e}"))),
     }
 }
 
@@ -278,9 +381,80 @@ impl ProofApiService for RelayHandler {
 
     async fn create_client(
         &self,
-        _request: Request<CreateClientRequest>,
+        request: Request<CreateClientRequest>,
     ) -> Result<Response<CreateClientResponse>, Status> {
-        Err(Status::unimplemented("create_client"))
+        let req = request.into_inner();
+
+        if req.src_chain != self.stellar_chain_id || req.dst_chain != self.cosmos_chain_id {
+            return Err(Status::unimplemented(format!(
+                "create_client only builds the stellar client on {}, got ({}, {})",
+                self.cosmos_chain_id, req.src_chain, req.dst_chain
+            )));
+        }
+
+        let quorum_configs = quorum_configs_from(&req.parameters)?;
+        let checksum = req
+            .parameters
+            .get("wasm_checksum")
+            .ok_or_else(|| Status::invalid_argument("parameters.wasm_checksum is required"))?;
+        let checksum = hex::decode(checksum.trim())
+            .map_err(|e| Status::invalid_argument(format!("parameters.wasm_checksum: {e}")))?;
+
+        let latest = self
+            .api
+            .get_latest_ledger()
+            .await
+            .map_err(|error| Status::internal(format!("get_latest_ledger failed: {error}")))?;
+        let slot = u32::try_from(parameter_u64(
+            &req.parameters,
+            "height",
+            u64::from(latest.saturating_sub(1)),
+        )?)
+        .map_err(|_| Status::invalid_argument("parameters.height does not fit in u32"))?;
+        let max_consensus_age = parameter_u64(
+            &req.parameters,
+            "max_consensus_age",
+            DEFAULT_TRUSTING_PERIOD,
+        )?;
+
+        let header = self.header.assemble_at(slot).await.map_err(|error| {
+            tracing::error!(%error, slot, "header assembly failed");
+            Status::internal(format!("header assembly failed: {error:#}"))
+        })?;
+
+        let consensus_state = self.consensus_state_at(slot, &header).await?;
+
+        let client_state = StellarClientState {
+            chain_id: self.stellar_chain_id.clone(),
+            latest_height: Some(WireHeight {
+                revision_number: 0,
+                revision_height: u64::from(slot),
+            }),
+            frozen_height: None,
+            quorum_configs,
+            proof_specs: Vec::new(),
+            network_id: self.header.network().network_id().to_vec(),
+            max_consensus_age,
+            router_contract_id: self.router_contract_id()?.to_vec(),
+            root_event_topic: crate::header::ROOT_EVENT_TOPIC.to_vec(),
+        };
+
+        tracing::info!(
+            slot,
+            quorum_configs = client_state.quorum_configs.len(),
+            "create_client built the stellar client state"
+        );
+
+        let tx = msg::encode_msgs(vec![msg::create_client_msg(
+            msg::wasm_client_state(client_state.encode_to_vec(), checksum, u64::from(slot)),
+            msg::wasm_consensus_state(consensus_state.encode_to_vec()),
+            &self.cosmos_signer,
+        )]);
+
+        Ok(Response::new(CreateClientResponse {
+            tx,
+            address: String::new(),
+        }))
     }
 
     async fn update_client(
