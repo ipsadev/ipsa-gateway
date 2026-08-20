@@ -21,7 +21,7 @@ use stellar_ibc_core::ibc::client_state::AnyClientState;
 
 use super::mock::{ledger_meta_with_invocations, ledger_meta_with_write, root_event, GatewayTest};
 
-fn sample_client_state_xdr() -> Vec<u8> {
+pub fn client_state_xdr() -> Vec<u8> {
     let trust_level = scval_struct(vec![
         ("numerator", ScVal::U32(1)),
         ("denominator", ScVal::U32(3)),
@@ -127,7 +127,7 @@ async fn query_client_state_converts_soroban_to_protobuf() {
     let t = GatewayTest::start(None).await;
     t.with_data(|d| {
         d.client_states
-            .insert("07-tendermint-0".into(), sample_client_state_xdr());
+            .insert("07-tendermint-0".into(), client_state_xdr());
     });
 
     let resp = t
@@ -575,7 +575,7 @@ async fn query_client_states_lists_decoded_states() {
     let t = GatewayTest::start(None).await;
     t.with_data(|d| {
         d.client_states
-            .insert("07-tendermint-0".into(), sample_client_state_xdr());
+            .insert("07-tendermint-0".into(), client_state_xdr());
     });
 
     let resp = t

@@ -15,9 +15,11 @@ use tonic::{Request, Response, Status};
 
 use stellar_ibc_core::api_client::{ApiClient, CosmosPacketEvent};
 use stellar_ibc_core::commitment::{ack_commitment_path, packet_commitment_path};
-use stellar_ibc_core::conversion::{scval_bytes, scval_vec_of_bytes};
+use stellar_ibc_core::conversion::{scval_bytes, scval_string, scval_vec_of_bytes};
+use stellar_ibc_core::ibc::client_state::AnyClientState;
 use stellar_ibc_core::ibc::msg::{self, ProtoAny};
 use stellar_ibc_core::ibc::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
+use stellar_ibc_core::ibc::soroban::tendermint_header_to_soroban_xdr;
 use stellar_ibc_core::ibc::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket};
 use stellar_ibc_core::state::{PathLookup, State};
 
@@ -274,7 +276,14 @@ impl RelayHandler {
             ));
         }
 
-        let functions = self.cosmos_messages(&selected).await?;
+        let target = selected
+            .iter()
+            .map(|event| event.height)
+            .max()
+            .expect("selected is non-empty");
+
+        let mut functions = vec![self.tendermint_update(&req.dst_client_id, target).await?];
+        functions.extend(self.cosmos_messages(&selected).await?);
 
         tracing::debug!(
             src_chain = %req.src_chain,
@@ -289,6 +298,61 @@ impl RelayHandler {
             tx: encode_host_functions(functions)?,
             address: self.ibc_contract_id.clone(),
         }))
+    }
+
+    async fn tendermint_update(
+        &self,
+        client_id: &str,
+        height: u64,
+    ) -> Result<HostFunction, Status> {
+        if client_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "dst_client_id is required to update the tendermint client",
+            ));
+        }
+
+        let trusted = self
+            .api
+            .get_client_state_xdr(&self.ibc_contract_id, &self.cosmos_signer, client_id)
+            .await
+            .map_err(|error| {
+                Status::failed_precondition(format!(
+                    "client {client_id} is not registered on stellar: {error}"
+                ))
+            })
+            .and_then(|xdr| {
+                AnyClientState::from_soroban_xdr(&xdr)
+                    .map_err(|e| Status::internal(format!("decode client state: {e}")))
+            })?
+            .latest_height();
+
+        if trusted >= height {
+            return Err(Status::failed_precondition(format!(
+                "client {client_id} already trusts height {trusted}, at or beyond the packet \
+                 height {height}; nothing to update"
+            )));
+        }
+
+        let header = self
+            .api
+            .get_cosmos_header(height, trusted)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, height, trusted, "cosmos header failed");
+                Status::internal(format!("cosmos header failed: {error}"))
+            })?;
+
+        let header_xdr = tendermint_header_to_soroban_xdr(&header)
+            .map_err(|e| Status::internal(format!("tendermint header to soroban xdr: {e}")))?;
+
+        host_function(
+            &self.ibc_contract_id,
+            "update_client",
+            vec![
+                scval_string(client_id).map_err(|e| Status::internal(format!("client id: {e}")))?,
+                scval_bytes(&header_xdr).map_err(|e| Status::internal(format!("header: {e}")))?,
+            ],
+        )
     }
 
     async fn cosmos_messages(

@@ -62,6 +62,7 @@ pub struct MockData {
     pub archive_tx_sets: HashMap<u32, Value>,
     pub cosmos_packets: HashMap<String, Value>,
     pub cosmos_proofs: HashMap<Vec<u8>, (Vec<u8>, Vec<u8>)>,
+    pub cosmos_headers: HashMap<u64, Vec<u8>>,
 }
 
 pub struct GatewayTest {
@@ -155,6 +156,7 @@ async fn start_mock_api() -> (String, Arc<Mutex<MockData>>) {
         .route("/archive/tx-set/{ledger}", get(archive_tx_set))
         .route("/cosmos/tx/{hash}/packets", get(cosmos_packets))
         .route("/cosmos/proof", get(cosmos_proof))
+        .route("/cosmos/header/{height}", get(cosmos_header))
         .route("/stellar/clients", get(list_clients))
         .route("/stellar/clients/{id}/state", get(client_state))
         .route(
@@ -538,6 +540,15 @@ async fn cosmos_proof(
     let key = hex::decode(params.get("key").cloned().unwrap_or_default()).unwrap_or_default();
     let (value, proof) = d.cosmos_proofs.get(&key).cloned().unwrap_or_default();
     Json(json!({ "value": hex::encode(value), "proof": hex::encode(proof) }))
+}
+
+async fn cosmos_header(
+    AxState(data): AxState<Arc<Mutex<MockData>>>,
+    Path(height): Path<u64>,
+) -> Json<Value> {
+    let d = data.lock().unwrap();
+    let header = d.cosmos_headers.get(&height).cloned().unwrap_or_default();
+    Json(json!({ "header": hex::encode(header) }))
 }
 
 async fn archive_scp(

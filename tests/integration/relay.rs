@@ -9,6 +9,8 @@ use stellar_ibc_core::ibc::msg::{
     WasmClientState, WasmConsensusState,
 };
 
+const TENDERMINT_CLIENT: &str = "07-tendermint-0";
+
 use interstellar_gateway::proto::proofapi::{CreateClientRequest, UpdateClientRequest};
 use interstellar_gateway::proto::{StellarClientState, StellarConsensusState};
 
@@ -402,6 +404,11 @@ async fn start_cosmos(events: serde_json::Value) -> GatewayTest {
             stellar_ibc_core::commitment::ack_commitment_path(b"08-wasm-0", 2),
             (vec![1u8], vec![8u8; 40]),
         );
+        d.cosmos_headers.insert(120, tendermint_header_proto(120));
+        d.client_states.insert(
+            TENDERMINT_CLIENT.to_string(),
+            super::query::client_state_xdr(),
+        );
     });
     t
 }
@@ -426,7 +433,7 @@ async fn relay_from_cosmos_builds_a_recv_packet_invocation() {
             source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
             timeout_tx_ids: Vec::new(),
             src_client_id: String::new(),
-            dst_client_id: String::new(),
+            dst_client_id: TENDERMINT_CLIENT.to_string(),
             src_packet_sequences: Vec::new(),
             dst_packet_sequences: Vec::new(),
         })
@@ -435,9 +442,16 @@ async fn relay_from_cosmos_builds_a_recv_packet_invocation() {
         .into_inner();
 
     let functions = host_functions(&resp.tx);
-    assert_eq!(functions.len(), 1);
+    assert_eq!(functions.len(), 2);
 
-    let (method, args) = invocation(&functions[0]);
+    let (update, update_args) = invocation(&functions[0]);
+    assert_eq!(
+        update, "update_client",
+        "the client must be advanced before a proof at that height is checked"
+    );
+    assert_eq!(update_args, 2, "update_client takes client id and header");
+
+    let (method, args) = invocation(&functions[1]);
     assert_eq!(method, "recv_packet");
     assert_eq!(args, 3, "recv_packet takes packet, proof and proof height");
     assert!(!resp.address.is_empty(), "the router must be named");
@@ -463,7 +477,7 @@ async fn relay_from_cosmos_builds_an_acknowledge_invocation() {
             source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
             timeout_tx_ids: Vec::new(),
             src_client_id: String::new(),
-            dst_client_id: String::new(),
+            dst_client_id: TENDERMINT_CLIENT.to_string(),
             src_packet_sequences: Vec::new(),
             dst_packet_sequences: Vec::new(),
         })
@@ -472,8 +486,9 @@ async fn relay_from_cosmos_builds_an_acknowledge_invocation() {
         .into_inner();
 
     let functions = host_functions(&resp.tx);
-    let (method, args) = invocation(&functions[0]);
+    assert_eq!(invocation(&functions[0]).0, "update_client");
 
+    let (method, args) = invocation(&functions[1]);
     assert_eq!(method, "acknowledge_packet");
     assert_eq!(
         args, 4,
@@ -501,7 +516,7 @@ async fn relay_from_cosmos_rejects_an_absent_commitment() {
             source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
             timeout_tx_ids: Vec::new(),
             src_client_id: String::new(),
-            dst_client_id: String::new(),
+            dst_client_id: TENDERMINT_CLIENT.to_string(),
             src_packet_sequences: Vec::new(),
             dst_packet_sequences: Vec::new(),
         })
@@ -511,6 +526,120 @@ async fn relay_from_cosmos_rejects_an_absent_commitment() {
     assert_eq!(err.code(), Code::FailedPrecondition);
     assert!(
         err.message().contains("no value committed"),
+        "got: {}",
+        err.message()
+    );
+}
+
+fn tendermint_header_proto(height: i64) -> Vec<u8> {
+    use ibc_proto::ibc::core::client::v1::Height as RawHeight;
+    use ibc_proto::ibc::lightclients::tendermint::v1::Header as RawTmHeader;
+    use tendermint_proto::google::protobuf::Timestamp;
+    use tendermint_proto::types::{Header as TmHeader, SignedHeader, ValidatorSet};
+
+    let header = TmHeader {
+        height,
+        time: Some(Timestamp {
+            seconds: 1_800_000_000,
+            nanos: 0,
+        }),
+        next_validators_hash: vec![4u8; 32],
+        app_hash: vec![6u8; 32],
+        ..Default::default()
+    };
+
+    RawTmHeader {
+        signed_header: Some(SignedHeader {
+            header: Some(header),
+            commit: None,
+        }),
+        validator_set: Some(ValidatorSet::default()),
+        trusted_height: Some(RawHeight {
+            revision_number: 0,
+            revision_height: 10,
+        }),
+        trusted_validators: Some(ValidatorSet::default()),
+    }
+    .encode_to_vec()
+}
+
+fn cosmos_request(dst_client_id: &str) -> interstellar_gateway::proto::proofapi::RelayByTxRequest {
+    interstellar_gateway::proto::proofapi::RelayByTxRequest {
+        src_chain: COSMOS.to_string(),
+        dst_chain: STELLAR.to_string(),
+        source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
+        timeout_tx_ids: Vec::new(),
+        src_client_id: String::new(),
+        dst_client_id: dst_client_id.to_string(),
+        src_packet_sequences: Vec::new(),
+        dst_packet_sequences: Vec::new(),
+    }
+}
+
+fn one_send_packet() -> serde_json::Value {
+    json!({
+        "events": [{
+            "kind": "send_packet",
+            "height": 120,
+            "packet_proto": hex::encode(cosmos_packet_proto(1, "07-tendermint-0", "08-wasm-0")),
+            "acknowledgements": [],
+        }],
+    })
+}
+
+#[tokio::test]
+async fn relay_from_cosmos_requires_a_destination_client() {
+    let t = start_cosmos(one_send_packet()).await;
+
+    let err = t.relay().relay_by_tx(cosmos_request("")).await.unwrap_err();
+
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(
+        err.message().contains("dst_client_id"),
+        "got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn relay_from_cosmos_rejects_an_unregistered_client() {
+    let t = start_cosmos(one_send_packet()).await;
+
+    let err = t
+        .relay()
+        .relay_by_tx(cosmos_request("07-tendermint-404"))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    assert!(
+        err.message().contains("not registered on stellar"),
+        "got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn relay_from_cosmos_rejects_a_client_already_past_the_packet() {
+    let t = start_cosmos(json!({
+        "events": [{
+            "kind": "send_packet",
+            "height": 5,
+            "packet_proto": hex::encode(cosmos_packet_proto(1, "07-tendermint-0", "08-wasm-0")),
+            "acknowledgements": [],
+        }],
+    }))
+    .await;
+
+    let err = t
+        .relay()
+        .relay_by_tx(cosmos_request(TENDERMINT_CLIENT))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    assert!(
+        err.message().contains("already trusts height"),
         "got: {}",
         err.message()
     );
