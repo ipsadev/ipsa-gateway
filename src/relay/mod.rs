@@ -6,12 +6,16 @@ use std::sync::Arc;
 use prost::Message as _;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use soroban_client::xdr::{LedgerHeader, Limits, ReadXdr};
+use soroban_client::xdr::{
+    ContractId, Hash, HostFunction, InvokeContractArgs, LedgerHeader, Limits, ReadXdr, ScAddress,
+    ScSymbol, ScVal, StringM, WriteXdr,
+};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use stellar_ibc_core::api_client::ApiClient;
+use stellar_ibc_core::api_client::{ApiClient, CosmosPacketEvent};
 use stellar_ibc_core::commitment::{ack_commitment_path, packet_commitment_path};
+use stellar_ibc_core::conversion::{scval_bytes, scval_vec_of_bytes};
 use stellar_ibc_core::ibc::msg::{self, ProtoAny};
 use stellar_ibc_core::ibc::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
 use stellar_ibc_core::ibc::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket};
@@ -27,6 +31,8 @@ use crate::proto::{
 };
 
 const IBC_VERSION: &str = "2";
+const COSMOS_SEND_PACKET: &str = "send_packet";
+const COSMOS_WRITE_ACK: &str = "write_acknowledgement";
 const DEFAULT_TRUSTING_PERIOD: u64 = 14 * 24 * 60 * 60;
 
 #[derive(Deserialize)]
@@ -230,6 +236,118 @@ impl RelayHandler {
         Ok(update)
     }
 
+    async fn relay_from_cosmos(
+        &self,
+        req: &RelayByTxRequest,
+    ) -> Result<Response<RelayByTxResponse>, Status> {
+        let mut found = Vec::new();
+        for hash in &req.source_tx_ids {
+            let events = self
+                .api
+                .get_cosmos_packet_events(&hex::encode(hash))
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, "fetching cosmos packet events failed");
+                    Status::internal(format!("fetching cosmos packet events failed: {error}"))
+                })?;
+            found.extend(events);
+        }
+
+        let selected: Vec<CosmosPacketEvent> = found
+            .into_iter()
+            .filter(|event| match event.kind.as_str() {
+                COSMOS_SEND_PACKET => {
+                    req.src_packet_sequences.is_empty()
+                        || req.src_packet_sequences.contains(&event.packet.sequence)
+                }
+                COSMOS_WRITE_ACK => {
+                    req.dst_packet_sequences.is_empty()
+                        || req.dst_packet_sequences.contains(&event.packet.sequence)
+                }
+                _ => false,
+            })
+            .collect();
+
+        if selected.is_empty() {
+            return Err(Status::not_found(
+                "no packet events found in the requested transactions",
+            ));
+        }
+
+        let functions = self.cosmos_messages(&selected).await?;
+
+        tracing::debug!(
+            src_chain = %req.src_chain,
+            dst_chain = %req.dst_chain,
+            source_txs = req.source_tx_ids.len(),
+            packets = selected.len(),
+            functions = functions.len(),
+            "relay_by_tx built soroban host functions"
+        );
+
+        Ok(Response::new(RelayByTxResponse {
+            tx: encode_host_functions(functions)?,
+            address: self.ibc_contract_id.clone(),
+        }))
+    }
+
+    async fn cosmos_messages(
+        &self,
+        events: &[CosmosPacketEvent],
+    ) -> Result<Vec<HostFunction>, Status> {
+        let mut functions = Vec::new();
+
+        for event in events {
+            let (key, method) = match event.kind.as_str() {
+                COSMOS_SEND_PACKET => (
+                    packet_commitment_path(
+                        event.packet.source_client.as_bytes(),
+                        event.packet.sequence,
+                    ),
+                    "recv_packet",
+                ),
+                COSMOS_WRITE_ACK => (
+                    ack_commitment_path(event.packet.dest_client.as_bytes(), event.packet.sequence),
+                    "acknowledge_packet",
+                ),
+                _ => continue,
+            };
+
+            let (value, proof) = self
+                .api
+                .get_cosmos_proof(&key, event.height)
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, height = event.height, "cosmos proof failed");
+                    Status::internal(format!("cosmos proof failed: {error}"))
+                })?;
+
+            if value.is_empty() {
+                return Err(Status::failed_precondition(format!(
+                    "cosmos has no value committed at the requested path in block {}",
+                    event.height
+                )));
+            }
+
+            let packet = msg::packet_to_scval(&event.packet)
+                .map_err(|e| Status::internal(format!("packet to ScVal: {e}")))?;
+
+            let mut args = vec![packet];
+            if method == "acknowledge_packet" {
+                args.push(
+                    scval_vec_of_bytes(&event.acknowledgements)
+                        .map_err(|e| Status::internal(format!("acknowledgements: {e}")))?,
+                );
+            }
+            args.push(scval_bytes(&proof).map_err(|e| Status::internal(format!("proof: {e}")))?);
+            args.push(ScVal::U64(event.height));
+
+            functions.push(host_function(&self.ibc_contract_id, method, args)?);
+        }
+
+        Ok(functions)
+    }
+
     async fn refreshable_ledger(&self) -> Result<u32, Status> {
         let latest = self
             .api
@@ -245,6 +363,41 @@ impl RelayHandler {
 
         Ok(latest - 1)
     }
+}
+
+fn host_function(router: &str, method: &str, args: Vec<ScVal>) -> Result<HostFunction, Status> {
+    let contract = stellar_strkey::Contract::from_string(router).map_err(|error| {
+        Status::failed_precondition(format!(
+            "ROUTER_CONTRACT_ADDRESS is not a contract strkey: {error}"
+        ))
+    })?;
+
+    Ok(HostFunction::InvokeContract(InvokeContractArgs {
+        contract_address: ScAddress::Contract(ContractId(Hash(contract.0))),
+        function_name: ScSymbol(
+            method
+                .parse::<StringM<32>>()
+                .map_err(|e| Status::internal(format!("method name {method}: {e}")))?,
+        ),
+        args: args
+            .try_into()
+            .map_err(|_| Status::internal("too many arguments for one invocation"))?,
+    }))
+}
+
+fn encode_host_functions(functions: Vec<HostFunction>) -> Result<Vec<u8>, Status> {
+    let count = u32::try_from(functions.len())
+        .map_err(|_| Status::internal("too many host functions for one response"))?;
+
+    let mut out = count.to_be_bytes().to_vec();
+    for function in functions {
+        out.extend_from_slice(
+            &function
+                .to_xdr(Limits::none())
+                .map_err(|e| Status::internal(format!("HostFunction encode: {e}")))?,
+        );
+    }
+    Ok(out)
 }
 
 fn quorum_configs_from(parameters: &HashMap<String, String>) -> Result<Vec<QuorumConfig>, Status> {
@@ -353,11 +506,14 @@ impl ProofApiService for RelayHandler {
             )));
         }
 
-        if req.src_chain != self.stellar_chain_id {
-            return Err(Status::unimplemented(format!(
-                "relay_by_tx from {} is not implemented yet",
-                req.src_chain
-            )));
+        if self.ibc_contract_id.is_empty() {
+            return Err(Status::failed_precondition(
+                "ROUTER_CONTRACT_ADDRESS is not configured",
+            ));
+        }
+
+        if req.src_chain == self.cosmos_chain_id {
+            return self.relay_from_cosmos(&req).await;
         }
 
         if self.ibc_contract_id.is_empty() {

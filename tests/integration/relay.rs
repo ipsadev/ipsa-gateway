@@ -348,3 +348,170 @@ async fn create_client_rejects_an_unknown_chain_pair() {
 
     assert_eq!(err.code(), Code::Unimplemented);
 }
+
+fn cosmos_packet_proto(sequence: u64, source: &str, dest: &str) -> Vec<u8> {
+    stellar_ibc_core::ibc::msg::encode_packet(&stellar_ibc_core::ibc::v2_msgs::Packet {
+        sequence,
+        source_client: source.to_string(),
+        dest_client: dest.to_string(),
+        timeout_timestamp: 1_800_000_000,
+        payloads: vec![stellar_ibc_core::ibc::v2_msgs::Payload {
+            source_port: "transfer".to_string(),
+            dest_port: "transfer".to_string(),
+            version: "ics20-1".to_string(),
+            encoding: "application/json".to_string(),
+            value: br#"{"denom":"uatom","amount":"5"}"#.to_vec(),
+        }],
+    })
+}
+
+fn host_functions(tx: &[u8]) -> Vec<soroban_client::xdr::HostFunction> {
+    use soroban_client::xdr::{Limits, ReadXdr};
+
+    let count = u32::from_be_bytes(tx[..4].try_into().unwrap()) as usize;
+    let mut cursor = &tx[4..];
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut limited = soroban_client::xdr::Limited::new(&mut cursor, Limits::none());
+        out.push(soroban_client::xdr::HostFunction::read_xdr(&mut limited).unwrap());
+    }
+    assert!(cursor.is_empty(), "the array must decode with no tail");
+    out
+}
+
+fn invocation(function: &soroban_client::xdr::HostFunction) -> (String, usize) {
+    match function {
+        soroban_client::xdr::HostFunction::InvokeContract(args) => {
+            (args.function_name.0.to_string(), args.args.len())
+        }
+        other => panic!("expected a contract invocation, got {other:?}"),
+    }
+}
+
+const COSMOS_TX: &str = "aabb";
+
+async fn start_cosmos(events: serde_json::Value) -> GatewayTest {
+    let t = start().await;
+    t.with_data(|d| {
+        d.cosmos_packets.insert(COSMOS_TX.to_string(), events);
+        d.cosmos_proofs.insert(
+            stellar_ibc_core::commitment::packet_commitment_path(b"07-tendermint-0", 1),
+            (vec![1u8], vec![9u8; 40]),
+        );
+        d.cosmos_proofs.insert(
+            stellar_ibc_core::commitment::ack_commitment_path(b"08-wasm-0", 2),
+            (vec![1u8], vec![8u8; 40]),
+        );
+    });
+    t
+}
+
+#[tokio::test]
+async fn relay_from_cosmos_builds_a_recv_packet_invocation() {
+    let t = start_cosmos(json!({
+        "events": [{
+            "kind": "send_packet",
+            "height": 120,
+            "packet_proto": hex::encode(cosmos_packet_proto(1, "07-tendermint-0", "08-wasm-0")),
+            "acknowledgements": [],
+        }],
+    }))
+    .await;
+
+    let resp = t
+        .relay()
+        .relay_by_tx(interstellar_gateway::proto::proofapi::RelayByTxRequest {
+            src_chain: COSMOS.to_string(),
+            dst_chain: STELLAR.to_string(),
+            source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
+            timeout_tx_ids: Vec::new(),
+            src_client_id: String::new(),
+            dst_client_id: String::new(),
+            src_packet_sequences: Vec::new(),
+            dst_packet_sequences: Vec::new(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let functions = host_functions(&resp.tx);
+    assert_eq!(functions.len(), 1);
+
+    let (method, args) = invocation(&functions[0]);
+    assert_eq!(method, "recv_packet");
+    assert_eq!(args, 3, "recv_packet takes packet, proof and proof height");
+    assert!(!resp.address.is_empty(), "the router must be named");
+}
+
+#[tokio::test]
+async fn relay_from_cosmos_builds_an_acknowledge_invocation() {
+    let t = start_cosmos(json!({
+        "events": [{
+            "kind": "write_acknowledgement",
+            "height": 120,
+            "packet_proto": hex::encode(cosmos_packet_proto(2, "07-tendermint-0", "08-wasm-0")),
+            "acknowledgements": [hex::encode([1u8])],
+        }],
+    }))
+    .await;
+
+    let resp = t
+        .relay()
+        .relay_by_tx(interstellar_gateway::proto::proofapi::RelayByTxRequest {
+            src_chain: COSMOS.to_string(),
+            dst_chain: STELLAR.to_string(),
+            source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
+            timeout_tx_ids: Vec::new(),
+            src_client_id: String::new(),
+            dst_client_id: String::new(),
+            src_packet_sequences: Vec::new(),
+            dst_packet_sequences: Vec::new(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let functions = host_functions(&resp.tx);
+    let (method, args) = invocation(&functions[0]);
+
+    assert_eq!(method, "acknowledge_packet");
+    assert_eq!(
+        args, 4,
+        "acknowledge_packet also takes the acknowledgements"
+    );
+}
+
+#[tokio::test]
+async fn relay_from_cosmos_rejects_an_absent_commitment() {
+    let t = start_cosmos(json!({
+        "events": [{
+            "kind": "send_packet",
+            "height": 120,
+            "packet_proto": hex::encode(cosmos_packet_proto(99, "07-tendermint-0", "08-wasm-0")),
+            "acknowledgements": [],
+        }],
+    }))
+    .await;
+
+    let err = t
+        .relay()
+        .relay_by_tx(interstellar_gateway::proto::proofapi::RelayByTxRequest {
+            src_chain: COSMOS.to_string(),
+            dst_chain: STELLAR.to_string(),
+            source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
+            timeout_tx_ids: Vec::new(),
+            src_client_id: String::new(),
+            dst_client_id: String::new(),
+            src_packet_sequences: Vec::new(),
+            dst_packet_sequences: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    assert!(
+        err.message().contains("no value committed"),
+        "got: {}",
+        err.message()
+    );
+}
