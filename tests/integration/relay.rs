@@ -5,10 +5,11 @@ use serde_json::json;
 use tonic::Code;
 
 use stellar_ibc_core::ibc::msg::{
-    MsgCreateClient, ProtoMessage as _, ProtoTxBody, WasmClientState, WasmConsensusState,
+    MsgCreateClient, MsgUpdateClient, ProtoMessage as _, ProtoTxBody, WasmClientMessage,
+    WasmClientState, WasmConsensusState,
 };
 
-use interstellar_gateway::proto::proofapi::CreateClientRequest;
+use interstellar_gateway::proto::proofapi::{CreateClientRequest, UpdateClientRequest};
 use interstellar_gateway::proto::{StellarClientState, StellarConsensusState};
 
 use super::mock::{ledger_meta_with_invocations, root_event, GatewayTest};
@@ -40,19 +41,30 @@ fn one_config() -> serde_json::Value {
     json!([{ "quorum_set_xdr": quorum_set_xdr(), "valid_from": 0 }])
 }
 
-async fn start() -> GatewayTest {
+async fn start_with(latest: u32, meta: Vec<u8>) -> GatewayTest {
     let archive = crate::archive_fixture::archive_responses(LEDGER);
-    let meta = ledger_meta_with_invocations(&[Some(vec![root_event(ROUTER, "ibc_root", ROOT)])]);
 
     let t = GatewayTest::start(Some(ROUTER)).await;
     t.with_data(|d| {
-        d.latest_ledger = LEDGER + 2;
+        d.latest_ledger = latest;
         d.archive_scp = archive.scp;
         d.archive_headers = archive.headers;
         d.archive_tx_sets = archive.tx_sets;
         d.ledgers.insert(LEDGER, (Vec::new(), Some(meta)));
     });
     t
+}
+
+fn meta_with_root() -> Vec<u8> {
+    ledger_meta_with_invocations(&[Some(vec![root_event(ROUTER, "ibc_root", ROOT)])])
+}
+
+async fn start() -> GatewayTest {
+    start_with(LEDGER + 2, meta_with_root()).await
+}
+
+async fn start_for_refresh() -> GatewayTest {
+    start_with(LEDGER + 1, meta_with_root()).await
 }
 
 fn stellar_client_state(tx: &[u8]) -> (StellarClientState, WasmClientState) {
@@ -217,6 +229,107 @@ async fn create_client_keeps_a_rotation_with_distinct_ranges() {
     let (inner, _) = stellar_client_state(&resp.tx);
     assert_eq!(inner.quorum_configs.len(), 2);
     assert_eq!(inner.quorum_configs[1].valid_from, 4_000_000);
+}
+
+fn update_header(tx: &[u8]) -> (String, interstellar_gateway::proto::StellarHeader) {
+    let body = ProtoTxBody::decode(tx).expect("a cosmos tx body");
+    assert_eq!(body.messages.len(), 1);
+    assert_eq!(
+        body.messages[0].type_url,
+        "/ibc.core.client.v1.MsgUpdateClient"
+    );
+
+    let msg = MsgUpdateClient::decode(body.messages[0].value.as_slice()).unwrap();
+    let carried = msg.client_message.unwrap();
+    assert_eq!(carried.type_url, "/ibc.lightclients.wasm.v1.ClientMessage");
+
+    let wasm = WasmClientMessage::decode(carried.value.as_slice()).unwrap();
+    let header = interstellar_gateway::proto::StellarHeader::decode(wasm.data.as_slice()).unwrap();
+    (msg.client_id, header)
+}
+
+#[tokio::test]
+async fn update_client_builds_a_header_for_the_named_client() {
+    let t = start_for_refresh().await;
+
+    let resp = t
+        .relay()
+        .update_client(UpdateClientRequest {
+            src_chain: STELLAR.to_string(),
+            dst_chain: COSMOS.to_string(),
+            dst_client_id: "08-wasm-0".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let (client_id, header) = update_header(&resp.tx);
+
+    assert_eq!(client_id, "08-wasm-0");
+    assert_eq!(
+        header.slot_index, LEDGER as u64,
+        "the refresh target must be a ledger whose successor has closed"
+    );
+    assert!(!header.scp_envelopes.is_empty());
+    assert!(!header.next_scp_envelopes.is_empty());
+    assert!(header.state_root_proof.is_some());
+}
+
+#[tokio::test]
+async fn update_client_refreshes_a_ledger_that_carries_no_root() {
+    let t = start_with(LEDGER + 1, ledger_meta_with_invocations(&[])).await;
+
+    let resp = t
+        .relay()
+        .update_client(UpdateClientRequest {
+            src_chain: STELLAR.to_string(),
+            dst_chain: COSMOS.to_string(),
+            dst_client_id: "08-wasm-0".to_string(),
+        })
+        .await
+        .expect("an idle link must still be able to keep its client alive")
+        .into_inner();
+
+    let (_, header) = update_header(&resp.tx);
+
+    assert!(
+        header.state_root_proof.is_none(),
+        "a ledger with no provable write binds no root"
+    );
+}
+
+#[tokio::test]
+async fn update_client_requires_a_client_id() {
+    let t = start_for_refresh().await;
+
+    let err = t
+        .relay()
+        .update_client(UpdateClientRequest {
+            src_chain: STELLAR.to_string(),
+            dst_chain: COSMOS.to_string(),
+            dst_client_id: String::new(),
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn update_client_rejects_an_unknown_chain_pair() {
+    let t = start_for_refresh().await;
+
+    let err = t
+        .relay()
+        .update_client(UpdateClientRequest {
+            src_chain: COSMOS.to_string(),
+            dst_chain: STELLAR.to_string(),
+            dst_client_id: "07-tendermint-0".to_string(),
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), Code::Unimplemented);
 }
 
 #[tokio::test]

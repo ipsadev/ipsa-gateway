@@ -190,7 +190,11 @@ impl RelayHandler {
         })
     }
 
-    async fn update_for(&self, client_id: &str, ledger: u32) -> Result<ProtoAny, Status> {
+    async fn update_message(
+        &self,
+        client_id: &str,
+        ledger: u32,
+    ) -> Result<(ProtoAny, bool), Status> {
         if client_id.is_empty() {
             return Err(Status::invalid_argument(
                 "dst_client_id is required to build the client update",
@@ -202,17 +206,44 @@ impl RelayHandler {
             Status::internal(format!("header assembly failed: {error:#}"))
         })?;
 
-        if header.state_root_proof.is_none() {
+        let carries_root = header.state_root_proof.is_some();
+
+        Ok((
+            msg::update_client_msg(
+                client_id,
+                msg::wasm_client_message(header.encode_to_vec()),
+                &self.cosmos_signer,
+            ),
+            carries_root,
+        ))
+    }
+
+    async fn update_for(&self, client_id: &str, ledger: u32) -> Result<ProtoAny, Status> {
+        let (update, carries_root) = self.update_message(client_id, ledger).await?;
+
+        if !carries_root {
             return Err(Status::failed_precondition(format!(
                 "ledger {ledger} carries no router state root; proofs at this height cannot be verified"
             )));
         }
 
-        Ok(msg::update_client_msg(
-            client_id,
-            msg::wasm_client_message(header.encode_to_vec()),
-            &self.cosmos_signer,
-        ))
+        Ok(update)
+    }
+
+    async fn refreshable_ledger(&self) -> Result<u32, Status> {
+        let latest = self
+            .api
+            .get_latest_ledger()
+            .await
+            .map_err(|error| Status::internal(format!("get_latest_ledger failed: {error}")))?;
+
+        if latest < 2 {
+            return Err(Status::failed_precondition(format!(
+                "ledger {latest} has no closed successor to bind it; nothing to update to"
+            )));
+        }
+
+        Ok(latest - 1)
     }
 }
 
@@ -459,9 +490,31 @@ impl ProofApiService for RelayHandler {
 
     async fn update_client(
         &self,
-        _request: Request<UpdateClientRequest>,
+        request: Request<UpdateClientRequest>,
     ) -> Result<Response<UpdateClientResponse>, Status> {
-        Err(Status::unimplemented("update_client"))
+        let req = request.into_inner();
+
+        if req.src_chain != self.stellar_chain_id || req.dst_chain != self.cosmos_chain_id {
+            return Err(Status::unimplemented(format!(
+                "update_client only refreshes the stellar client on {}, got ({}, {})",
+                self.cosmos_chain_id, req.src_chain, req.dst_chain
+            )));
+        }
+
+        let ledger = self.refreshable_ledger().await?;
+        let (update, carries_root) = self.update_message(&req.dst_client_id, ledger).await?;
+
+        tracing::info!(
+            client_id = %req.dst_client_id,
+            ledger,
+            carries_root,
+            "update_client built a header"
+        );
+
+        Ok(Response::new(UpdateClientResponse {
+            tx: msg::encode_msgs(vec![update]),
+            address: String::new(),
+        }))
     }
 }
 
