@@ -25,7 +25,13 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
         }
     };
 
-    let state = Arc::new(Mutex::new(State::new(api.clone(), ibc_contract_id)));
+    let router_address = (!cfg.ibc_contract_id.is_empty()).then(|| cfg.ibc_contract_id.clone());
+
+    let state = Arc::new(Mutex::new(State::new(
+        api.clone(),
+        ibc_contract_id,
+        router_address,
+    )));
 
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter

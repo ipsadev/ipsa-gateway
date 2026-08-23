@@ -19,7 +19,10 @@ use stellar_ibc_core::conversion::{
 };
 use stellar_ibc_core::ibc::client_state::AnyClientState;
 
-use super::mock::{ledger_meta_with_invocations, ledger_meta_with_write, root_event, GatewayTest};
+use super::mock::{
+    ledger_meta_with_invocations, ledger_meta_with_write, root_event, router_event_json,
+    GatewayTest,
+};
 
 pub fn client_state_xdr() -> Vec<u8> {
     let trust_level = scval_struct(vec![
@@ -41,9 +44,12 @@ pub fn client_state_xdr() -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn latest_height_returns_api_sequence() {
+async fn latest_height_is_bounded_by_the_archive_not_the_live_tip() {
     let t = GatewayTest::start(None).await;
-    t.with_data(|d| d.latest_ledger = 777);
+    t.with_data(|d| {
+        d.latest_ledger = 9_000;
+        d.archive_latest_ledger = 778;
+    });
 
     let resp = t
         .query()
@@ -54,6 +60,21 @@ async fn latest_height_returns_api_sequence() {
 
     assert_eq!(resp.revision_height, 777);
     assert_eq!(resp.revision_number, 0);
+}
+
+#[tokio::test]
+async fn latest_height_stays_one_short_of_the_published_tip() {
+    let t = GatewayTest::start(None).await;
+    t.with_data(|d| d.archive_latest_ledger = 4_267_008);
+
+    let resp = t
+        .query()
+        .latest_height(LatestHeightRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.revision_height, 4_267_007);
 }
 
 #[tokio::test]
@@ -588,4 +609,206 @@ async fn query_client_states_lists_decoded_states() {
     assert_eq!(resp.client_states.len(), 1);
     assert_eq!(resp.client_states[0].client_id, "07-tendermint-0");
     assert!(!resp.client_states[0].client_state.is_empty());
+}
+
+#[tokio::test]
+async fn replay_across_a_gap_applies_every_event_bearing_ledger() {
+    let contract = [7u8; 32];
+    let client_id = "07-tendermint-0";
+
+    let first = ledger_meta_with_write(
+        contract,
+        packet_commitment_path(client_id.as_bytes(), 1),
+        vec![0xC1u8; 32],
+    );
+    let second = ledger_meta_with_write(
+        contract,
+        packet_commitment_path(client_id.as_bytes(), 2),
+        vec![0xC2u8; 32],
+    );
+
+    let t = GatewayTest::start(Some(contract)).await;
+    t.with_data(|d| {
+        d.ledgers.insert(5, (vec![], Some(first)));
+        d.ledgers.insert(40, (vec![], Some(second)));
+        d.events.push(router_event_json(contract, 5));
+        d.events.push(router_event_json(contract, 40));
+    });
+
+    let at_five = t
+        .query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 1,
+            height: 5,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(at_five.commitment.len(), 32);
+
+    let across_gap = t
+        .query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 2,
+            height: 40,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        across_gap.commitment.len(),
+        32,
+        "a write 35 ledgers past the last processed one must survive the filtered replay"
+    );
+
+    let earlier = t
+        .query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 1,
+            height: 40,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        earlier.commitment.len(),
+        32,
+        "the filtered replay must not drop state written before the gap"
+    );
+}
+
+#[tokio::test]
+async fn a_single_ledger_query_does_not_consult_the_event_index() {
+    let contract = [7u8; 32];
+    let client_id = "07-tendermint-0";
+
+    let meta = ledger_meta_with_write(
+        contract,
+        packet_commitment_path(client_id.as_bytes(), 1),
+        vec![0xC1u8; 32],
+    );
+
+    let t = GatewayTest::start(Some(contract)).await;
+    t.with_data(|d| {
+        d.ledgers.insert(5, (vec![], Some(meta)));
+    });
+
+    let at_five = t
+        .query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 1,
+            height: 5,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        at_five.commitment.len(),
+        32,
+        "a single-ledger query must never consult the event index"
+    );
+}
+
+#[tokio::test]
+async fn replay_keeps_paging_past_a_window_that_holds_no_events() {
+    let contract = [7u8; 32];
+    let client_id = "07-tendermint-0";
+
+    let first = ledger_meta_with_write(
+        contract,
+        packet_commitment_path(client_id.as_bytes(), 1),
+        vec![0xC1u8; 32],
+    );
+    let late = ledger_meta_with_write(
+        contract,
+        packet_commitment_path(client_id.as_bytes(), 2),
+        vec![0xC2u8; 32],
+    );
+
+    let t = GatewayTest::start(Some(contract)).await;
+    t.with_data(|d| {
+        d.ledgers.insert(5, (vec![], Some(first)));
+        d.ledgers.insert(900, (vec![], Some(late)));
+        d.event_pages = vec![
+            ("0002147483648000-0".to_string(), vec![]),
+            (String::new(), vec![router_event_json(contract, 900)]),
+        ];
+    });
+
+    t.query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 1,
+            height: 5,
+        })
+        .await
+        .unwrap();
+
+    let across = t
+        .query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 2,
+            height: 900,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        across.commitment.len(),
+        32,
+        "an empty event page means 'nothing in this window', not 'no more events' — \
+         stopping there serves an absence proof for a commitment that exists"
+    );
+}
+
+#[tokio::test]
+async fn replay_stops_once_the_cursor_has_swept_past_the_target() {
+    let contract = [7u8; 32];
+    let client_id = "07-tendermint-0";
+
+    let meta = ledger_meta_with_write(
+        contract,
+        packet_commitment_path(client_id.as_bytes(), 1),
+        vec![0xC1u8; 32],
+    );
+
+    let t = GatewayTest::start(Some(contract)).await;
+    t.with_data(|d| {
+        d.ledgers.insert(5, (vec![], Some(meta)));
+        d.ledgers.insert(40, (vec![], None));
+        d.event_pages = vec![(format!("{}-0", 9_000u64 << 32), vec![])];
+    });
+
+    t.query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 1,
+            height: 5,
+        })
+        .await
+        .unwrap();
+
+    let later = t
+        .query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 1,
+            height: 40,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        later.commitment.len(),
+        32,
+        "a cursor already past the target ends the sweep without dropping earlier state"
+    );
 }

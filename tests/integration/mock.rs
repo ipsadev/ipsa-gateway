@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::extract::{Path, State as AxState};
+use axum::extract::{Path, Query, State as AxState};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
@@ -55,8 +55,10 @@ pub struct MockData {
     pub client_states: HashMap<String, Vec<u8>>,
     pub consensus_states: HashMap<String, Vec<u8>>,
     pub events: Vec<Value>,
+    pub event_pages: Vec<(String, Vec<Value>)>,
     pub prepare_calls: Vec<PrepareCall>,
     pub submit_calls: Vec<String>,
+    pub archive_latest_ledger: u32,
     pub archive_scp: HashMap<u32, Value>,
     pub archive_headers: HashMap<u32, Value>,
     pub archive_tx_sets: HashMap<u32, Value>,
@@ -148,6 +150,7 @@ async fn start_mock_api() -> (String, Arc<Mutex<MockData>>) {
         .route("/tx/prepare", post(tx_prepare))
         .route("/tx/submit", post(tx_submit))
         .route("/events", get(events))
+        .route("/archive/latest", get(archive_latest))
         .route("/archive/scp/{ledger}", get(archive_scp))
         .route(
             "/archive/ledger-header/{ledger}",
@@ -253,8 +256,35 @@ async fn tx_submit(
     Json(out)
 }
 
-async fn events(AxState(data): AxState<Arc<Mutex<MockData>>>) -> Json<Value> {
+async fn events(
+    AxState(data): AxState<Arc<Mutex<MockData>>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Value> {
     let d = data.lock().unwrap();
+
+    if !d.event_pages.is_empty() {
+        let asked = params.get("cursor").cloned().unwrap_or_default();
+        let index = if asked.is_empty() {
+            0
+        } else {
+            d.event_pages
+                .iter()
+                .position(|(c, _)| *c == asked)
+                .map(|i| i + 1)
+                .unwrap_or(d.event_pages.len())
+        };
+        let (cursor, events) = d
+            .event_pages
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| (String::new(), Vec::new()));
+        return Json(json!({
+            "latest_ledger": d.latest_ledger,
+            "cursor": cursor,
+            "events": events,
+        }));
+    }
+
     Json(json!({
         "latest_ledger": d.latest_ledger,
         "cursor": "",
@@ -340,6 +370,18 @@ pub fn ledger_meta_with_write(contract: [u8; 32], key: Vec<u8>, val: Vec<u8>) ->
         scp_info: VecM::default(),
     };
     LedgerCloseMeta::V0(v0).to_xdr(Limits::none()).unwrap()
+}
+
+pub fn router_event_json(contract: [u8; 32], ledger: u32) -> Value {
+    json!({
+        "id": format!("{ledger}-0"),
+        "ledger": ledger,
+        "ledger_closed_at": "1970-01-01T00:00:00Z",
+        "contract_id": stellar_strkey::Contract(contract).to_string().as_str(),
+        "tx_hash": "00",
+        "topics_xdr": [],
+        "value_xdr": "",
+    })
 }
 
 pub fn root_event(contract: [u8; 32], topic: &str, root: [u8; 32]) -> ContractEvent {
@@ -549,6 +591,16 @@ async fn cosmos_header(
     let d = data.lock().unwrap();
     let header = d.cosmos_headers.get(&height).cloned().unwrap_or_default();
     Json(json!({ "header": hex::encode(header) }))
+}
+
+async fn archive_latest(AxState(data): AxState<Arc<Mutex<MockData>>>) -> Json<Value> {
+    let d = data.lock().unwrap();
+    Json(json!({
+        "ledger": d.archive_latest_ledger,
+        "archive": d.archive_latest_ledger,
+        "watcher": Value::Null,
+        "source": "archive",
+    }))
 }
 
 async fn archive_scp(
