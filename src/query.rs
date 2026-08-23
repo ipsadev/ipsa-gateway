@@ -68,14 +68,29 @@ impl StellarGatewayQuery for QueryHandler {
         &self,
         _request: Request<LatestHeightRequest>,
     ) -> Result<Response<LatestHeightResponse>, Status> {
-        let latest_sequence: u32 = self.api.get_latest_ledger().await.map_err(|error| {
-            tracing::error!(%error, "get_latest_ledger failed");
-            Status::internal(format!("get_latest_ledger failed: {error}"))
-        })?;
+        let published: u32 = self
+            .api
+            .get_archive_latest_ledger()
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "get_archive_latest_ledger failed");
+                Status::internal(format!("get_archive_latest_ledger failed: {error}"))
+            })?;
 
-        tracing::debug!(revision_height = latest_sequence, "latest height");
+        let archived = published.saturating_sub(1);
+
+        if let Ok(live) = self.api.get_latest_ledger().await {
+            tracing::debug!(
+                archived,
+                published,
+                live,
+                behind = live.saturating_sub(archived),
+                "latest height (archive-bounded)"
+            );
+        }
+
         Ok(Response::new(LatestHeightResponse {
-            revision_height: latest_sequence.into(),
+            revision_height: archived.into(),
             revision_number: 0,
         }))
     }
