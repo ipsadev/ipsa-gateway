@@ -15,7 +15,7 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY . .
 
-RUN cargo build --release --bin interstellar-gateway
+RUN cargo build --release --bin ipsa-gateway
 
 FROM debian:bookworm-slim AS runtime
 
@@ -28,10 +28,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=builder /build/target/release/interstellar-gateway /usr/local/bin/interstellar-gateway
+COPY --from=builder /build/target/release/ipsa-gateway /usr/local/bin/ipsa-gateway
 
 EXPOSE 50052
 
 ENV STELLAR_GATEWAY_HOST=0.0.0.0
 
-ENTRYPOINT ["interstellar-gateway"]
+ENTRYPOINT ["ipsa-gateway"]

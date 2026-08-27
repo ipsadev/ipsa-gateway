@@ -11,8 +11,8 @@ use stellar_ibc_core::ibc::msg::{
 
 const TENDERMINT_CLIENT: &str = "07-tendermint-0";
 
-use interstellar_gateway::proto::proofapi::{CreateClientRequest, UpdateClientRequest};
-use interstellar_gateway::proto::{StellarClientState, StellarConsensusState};
+use ipsa_gateway::proto::proofapi::{CreateClientRequest, UpdateClientRequest};
+use ipsa_gateway::proto::{StellarClientState, StellarConsensusState};
 
 use super::mock::{ledger_meta_with_invocations, root_event, GatewayTest};
 
@@ -233,7 +233,7 @@ async fn create_client_keeps_a_rotation_with_distinct_ranges() {
     assert_eq!(inner.quorum_configs[1].valid_from, 4_000_000);
 }
 
-fn update_header(tx: &[u8]) -> (String, interstellar_gateway::proto::StellarHeader) {
+fn update_header(tx: &[u8]) -> (String, ipsa_gateway::proto::StellarHeader) {
     let body = ProtoTxBody::decode(tx).expect("a cosmos tx body");
     assert_eq!(body.messages.len(), 1);
     assert_eq!(
@@ -246,7 +246,7 @@ fn update_header(tx: &[u8]) -> (String, interstellar_gateway::proto::StellarHead
     assert_eq!(carried.type_url, "/ibc.lightclients.wasm.v1.ClientMessage");
 
     let wasm = WasmClientMessage::decode(carried.value.as_slice()).unwrap();
-    let header = interstellar_gateway::proto::StellarHeader::decode(wasm.data.as_slice()).unwrap();
+    let header = ipsa_gateway::proto::StellarHeader::decode(wasm.data.as_slice()).unwrap();
     (msg.client_id, header)
 }
 
@@ -427,7 +427,7 @@ async fn relay_from_cosmos_builds_a_recv_packet_invocation() {
 
     let resp = t
         .relay()
-        .relay_by_tx(interstellar_gateway::proto::proofapi::RelayByTxRequest {
+        .relay_by_tx(ipsa_gateway::proto::proofapi::RelayByTxRequest {
             src_chain: COSMOS.to_string(),
             dst_chain: STELLAR.to_string(),
             source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
@@ -471,7 +471,7 @@ async fn relay_from_cosmos_builds_an_acknowledge_invocation() {
 
     let resp = t
         .relay()
-        .relay_by_tx(interstellar_gateway::proto::proofapi::RelayByTxRequest {
+        .relay_by_tx(ipsa_gateway::proto::proofapi::RelayByTxRequest {
             src_chain: COSMOS.to_string(),
             dst_chain: STELLAR.to_string(),
             source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
@@ -510,7 +510,7 @@ async fn relay_from_cosmos_rejects_an_absent_commitment() {
 
     let err = t
         .relay()
-        .relay_by_tx(interstellar_gateway::proto::proofapi::RelayByTxRequest {
+        .relay_by_tx(ipsa_gateway::proto::proofapi::RelayByTxRequest {
             src_chain: COSMOS.to_string(),
             dst_chain: STELLAR.to_string(),
             source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],
@@ -563,8 +563,8 @@ fn tendermint_header_proto(height: i64) -> Vec<u8> {
     .encode_to_vec()
 }
 
-fn cosmos_request(dst_client_id: &str) -> interstellar_gateway::proto::proofapi::RelayByTxRequest {
-    interstellar_gateway::proto::proofapi::RelayByTxRequest {
+fn cosmos_request(dst_client_id: &str) -> ipsa_gateway::proto::proofapi::RelayByTxRequest {
+    ipsa_gateway::proto::proofapi::RelayByTxRequest {
         src_chain: COSMOS.to_string(),
         dst_chain: STELLAR.to_string(),
         source_tx_ids: vec![hex::decode(COSMOS_TX).unwrap()],

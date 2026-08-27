@@ -6,7 +6,7 @@ use soroban_client::xdr::{
 };
 use tonic::Code;
 
-use interstellar_gateway::proto::{
+use ipsa_gateway::proto::{
     EventsRequest, LatestHeightRequest, QueryAcknowledgementRequest, QueryClientStateRequest,
     QueryClientStatesRequest, QueryConsensusStateRequest, QueryIbcHeaderRequest,
     QueryNextSeqRecvRequest, QueryPacketCommitmentRequest, QueryPacketReceiptRequest,
@@ -372,7 +372,7 @@ async fn query_ibc_header_assembles_scp_evidence() {
         .unwrap()
         .into_inner();
 
-    let header = interstellar_gateway::proto::StellarHeader::decode(resp.header.as_slice())
+    let header = ipsa_gateway::proto::StellarHeader::decode(resp.header.as_slice())
         .expect("a StellarHeader the light client can decode");
 
     assert_eq!(header.slot_index, LEDGER as u64);
@@ -397,7 +397,7 @@ async fn query_ibc_header_assembles_scp_evidence() {
 const ROUTER: [u8; 32] = [7u8; 32];
 const ROOT: [u8; 32] = [42u8; 32];
 
-async fn header_with_meta(meta: Vec<u8>) -> interstellar_gateway::proto::StellarHeader {
+async fn header_with_meta(meta: Vec<u8>) -> ipsa_gateway::proto::StellarHeader {
     const LEDGER: u32 = 4_160_600;
     let archive = crate::archive_fixture::archive_responses(LEDGER);
 
@@ -419,10 +419,10 @@ async fn header_with_meta(meta: Vec<u8>) -> interstellar_gateway::proto::Stellar
         .unwrap()
         .into_inner();
 
-    interstellar_gateway::proto::StellarHeader::decode(resp.header.as_slice()).unwrap()
+    ipsa_gateway::proto::StellarHeader::decode(resp.header.as_slice()).unwrap()
 }
 
-fn root_in(proof: &interstellar_gateway::proto::StateRootProof) -> Vec<u8> {
+fn root_in(proof: &ipsa_gateway::proto::StateRootProof) -> Vec<u8> {
     let preimage =
         InvokeHostFunctionSuccessPreImage::from_xdr(&proof.success_preimage_xdr, Limits::none())
             .expect("the preimage the result committed to");
