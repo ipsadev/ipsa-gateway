@@ -61,6 +61,48 @@ impl QueryHandler {
     }
 }
 
+pub fn resolve_requested_slot(requested: u32, published: u32) -> Option<u32> {
+    if requested != 0 {
+        return Some(requested);
+    }
+
+    match published.saturating_sub(1) {
+        0 => None,
+        slot => Some(slot),
+    }
+}
+
+impl QueryHandler {
+    async fn archive_published(&self) -> Result<u32, Status> {
+        self.api.get_archive_latest_ledger().await.map_err(|error| {
+            tracing::error!(%error, "get_archive_latest_ledger failed");
+            Status::internal(format!("get_archive_latest_ledger failed: {error}"))
+        })
+    }
+
+    async fn resolve_slot(&self, requested: u32) -> Result<u32, Status> {
+        if requested != 0 {
+            return Ok(requested);
+        }
+
+        let published = self.archive_published().await?;
+
+        let slot = resolve_requested_slot(requested, published).ok_or_else(|| {
+            Status::failed_precondition(
+                "no archived ledger is available yet; the history archive has published nothing",
+            )
+        })?;
+
+        tracing::debug!(
+            slot,
+            published,
+            "height 0 resolved to the latest archived ledger"
+        );
+
+        Ok(slot)
+    }
+}
+
 #[tonic::async_trait]
 impl StellarGatewayQuery for QueryHandler {
     #[tracing::instrument(skip(self, _request), name = "grpc.latest_height")]
@@ -68,15 +110,7 @@ impl StellarGatewayQuery for QueryHandler {
         &self,
         _request: Request<LatestHeightRequest>,
     ) -> Result<Response<LatestHeightResponse>, Status> {
-        let published: u32 = self
-            .api
-            .get_archive_latest_ledger()
-            .await
-            .map_err(|error| {
-                tracing::error!(%error, "get_archive_latest_ledger failed");
-                Status::internal(format!("get_archive_latest_ledger failed: {error}"))
-            })?;
-
+        let published = self.archive_published().await?;
         let archived = published.saturating_sub(1);
 
         if let Ok(live) = self.api.get_latest_ledger().await {
@@ -376,7 +410,9 @@ impl StellarGatewayQuery for QueryHandler {
         &self,
         request: Request<QueryStellarClientParamsRequest>,
     ) -> Result<Response<QueryStellarClientParamsResponse>, Status> {
-        let slot = request.into_inner().height as u32;
+        let slot = self
+            .resolve_slot(request.into_inner().height as u32)
+            .await?;
 
         let quorum_configs = self.header.quorum_configs(slot).await.map_err(|error| {
             tracing::error!(%error, slot, "quorum config fetch failed");

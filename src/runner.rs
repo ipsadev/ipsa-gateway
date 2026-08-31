@@ -27,11 +27,18 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
 
     let router_address = (!cfg.ibc_contract_id.is_empty()).then(|| cfg.ibc_contract_id.clone());
 
-    let state = Arc::new(Mutex::new(State::new(
-        api.clone(),
-        ibc_contract_id,
-        router_address,
-    )));
+    if cfg.router_genesis_ledger.is_none() {
+        tracing::warn!(
+            "ROUTER_GENESIS_LEDGER is unset — the state tree cannot be rebuilt from the router's \
+             first write, so proof requests will be refused rather than answered with a root the \
+             chain never published"
+        );
+    }
+
+    let state = Arc::new(Mutex::new(
+        State::new(api.clone(), ibc_contract_id, router_address)
+            .with_genesis_ledger(cfg.router_genesis_ledger),
+    ));
 
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -72,6 +79,7 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
                 api.clone(),
                 cfg.ibc_contract_id.clone(),
                 cfg.transfer_contract_id.clone(),
+                cfg.cosmos_chain_id.clone(),
             )
             .into_server(),
         )
@@ -85,6 +93,7 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
                 cfg.ibc_contract_id.clone(),
                 cfg.event_lookback_ledgers,
                 cfg.cosmos_signer.clone(),
+                cfg.source_account.clone(),
             )
             .into_server(),
         )

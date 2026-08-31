@@ -14,12 +14,15 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use stellar_ibc_core::api_client::{ApiClient, CosmosPacketEvent};
-use stellar_ibc_core::commitment::{ack_commitment_path, packet_commitment_path};
-use stellar_ibc_core::conversion::{scval_bytes, scval_string, scval_vec_of_bytes};
+use stellar_ibc_core::commitment::{
+    ack_commitment_path, packet_commitment_path, packet_receipt_path,
+};
+use stellar_ibc_core::conversion::{scval_bytes, scval_string, scval_u64, scval_vec_of_bytes};
 use stellar_ibc_core::ibc::client_state::AnyClientState;
 use stellar_ibc_core::ibc::msg::{self, ProtoAny};
 use stellar_ibc_core::ibc::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
 use stellar_ibc_core::ibc::soroban::tendermint_header_to_soroban_xdr;
+use stellar_ibc_core::ibc::tendermint::{tendermint_genesis, TendermintBootstrap};
 use stellar_ibc_core::ibc::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket};
 use stellar_ibc_core::state::{PathLookup, State};
 
@@ -31,6 +34,11 @@ use crate::proto::proofapi::{
 use crate::proto::{
     Height as WireHeight, QuorumConfig, StellarClientState, StellarConsensusState, StellarHeader,
 };
+
+const TENDERMINT_CLIENT_TYPE: &str = "07-tendermint";
+const DEFAULT_TRUSTING_PERIOD_SECS: u64 = 14 * 24 * 60 * 60;
+const DEFAULT_UNBONDING_PERIOD_SECS: u64 = 21 * 24 * 60 * 60;
+const DEFAULT_CLOCK_DRIFT_SECS: u64 = 40;
 
 const IBC_VERSION: &str = "2";
 const COSMOS_SEND_PACKET: &str = "send_packet";
@@ -53,9 +61,11 @@ pub struct RelayHandler {
     ibc_contract_id: String,
     event_lookback_ledgers: u32,
     cosmos_signer: String,
+    source_account: String,
 }
 
 impl RelayHandler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         api: ApiClient,
         state: Arc<Mutex<State>>,
@@ -65,6 +75,7 @@ impl RelayHandler {
         ibc_contract_id: String,
         event_lookback_ledgers: u32,
         cosmos_signer: String,
+        source_account: String,
     ) -> Self {
         Self {
             api,
@@ -75,11 +86,151 @@ impl RelayHandler {
             ibc_contract_id,
             event_lookback_ledgers,
             cosmos_signer,
+            source_account,
         }
+    }
+
+    pub fn source_account(&self) -> &str {
+        self.source_account.as_str()
     }
 
     pub fn into_server(self) -> ProofApiServiceServer<Self> {
         ProofApiServiceServer::new(self)
+    }
+
+    async fn tendermint_genesis_for_stellar(
+        &self,
+        parameters: &HashMap<String, String>,
+    ) -> Result<Response<CreateClientResponse>, Status> {
+        if self.ibc_contract_id.is_empty() {
+            return Err(Status::failed_precondition(
+                "ROUTER_CONTRACT_ADDRESS is not configured",
+            ));
+        }
+
+        let height = match parameter_u64(parameters, "height", 0)? {
+            0 => self
+                .api
+                .get_cosmos_latest_height()
+                .await
+                .map_err(|error| Status::internal(format!("cosmos latest height: {error}")))?,
+            height => height,
+        };
+
+        let header = self
+            .api
+            .get_cosmos_header(height, 0)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, height, "cosmos header failed");
+                Status::internal(format!("cosmos header at {height}: {error}"))
+            })?;
+
+        let params = TendermintBootstrap {
+            chain_id: self.cosmos_chain_id.clone(),
+            height,
+            trusting_period_secs: parameter_u64(
+                parameters,
+                "trusting_period_secs",
+                DEFAULT_TRUSTING_PERIOD_SECS,
+            )?,
+            unbonding_period_secs: parameter_u64(
+                parameters,
+                "unbonding_period_secs",
+                DEFAULT_UNBONDING_PERIOD_SECS,
+            )?,
+            max_clock_drift_secs: parameter_u64(
+                parameters,
+                "max_clock_drift_secs",
+                DEFAULT_CLOCK_DRIFT_SECS,
+            )?,
+        };
+
+        let genesis = tendermint_genesis(&header, &params).map_err(|error| {
+            Status::internal(format!("building the tendermint genesis: {error:#}"))
+        })?;
+
+        let client_type = match parameters.get("client_type").map(|t| t.trim()) {
+            Some(client_type) if !client_type.is_empty() => client_type.to_string(),
+            _ => TENDERMINT_CLIENT_TYPE.to_string(),
+        };
+
+        if self.source_account().is_empty() {
+            return Err(Status::failed_precondition(
+                "STELLAR_SOURCE_ACCOUNT is not configured, so no transaction can be prepared",
+            ));
+        }
+
+        let tx = self
+            .api
+            .build_unsigned_tx(
+                &self.ibc_contract_id,
+                self.source_account(),
+                "create_client",
+                vec![
+                    scval_string(&client_type)
+                        .map_err(|error| Status::internal(format!("client_type scval: {error}")))?,
+                    scval_bytes(&genesis.client_state_xdr).map_err(|error| {
+                        Status::internal(format!("client_state scval: {error}"))
+                    })?,
+                    scval_bytes(&genesis.consensus_state_xdr).map_err(|error| {
+                        Status::internal(format!("consensus_state scval: {error}"))
+                    })?,
+                    scval_u64(genesis.height),
+                ],
+            )
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "build_unsigned_tx(create_client) failed");
+                Status::internal(format!("build_unsigned_tx(create_client): {error}"))
+            })?;
+
+        tracing::info!(
+            %client_type,
+            chain_id = %genesis.chain_id,
+            height = genesis.height,
+            "create_client prepared the tendermint client transaction for stellar"
+        );
+
+        Ok(Response::new(CreateClientResponse {
+            tx,
+            address: self.ibc_contract_id.clone(),
+        }))
+    }
+
+    async fn tendermint_refresh_for_stellar(
+        &self,
+        client_id: &str,
+    ) -> Result<Response<UpdateClientResponse>, Status> {
+        if self.ibc_contract_id.is_empty() {
+            return Err(Status::failed_precondition(
+                "ROUTER_CONTRACT_ADDRESS is not configured",
+            ));
+        }
+
+        let target = self
+            .api
+            .get_cosmos_latest_height()
+            .await
+            .map_err(|error| Status::internal(format!("cosmos latest height: {error}")))?;
+
+        let trusted = self.trusted_height(client_id).await?;
+
+        if trusted >= target {
+            return Err(Status::failed_precondition(format!(
+                "client {client_id} already trusts height {trusted}, at or beyond the cosmos head \
+                 {target}; nothing to update"
+            )));
+        }
+
+        let function = self.tendermint_update(client_id, trusted, target).await?;
+
+        tracing::info!(%client_id, trusted, target, "update_client built a tendermint header");
+
+        Ok(Response::new(UpdateClientResponse {
+            tx: encode_host_functions(vec![function])?,
+            address: self.ibc_contract_id.clone(),
+        }))
     }
 
     fn known_pair(&self, src: &str, dst: &str) -> bool {
@@ -270,20 +421,44 @@ impl RelayHandler {
             })
             .collect();
 
-        if selected.is_empty() {
+        let expired = self.expired_stellar_packets(req).await?;
+
+        if selected.is_empty() && expired.is_empty() {
             return Err(Status::not_found(
                 "no packet events found in the requested transactions",
             ));
         }
 
-        let target = selected
+        let mut target = selected
             .iter()
-            .map(|event| event.height)
+            .map(|event| event.height + 1)
             .max()
-            .expect("selected is non-empty");
+            .unwrap_or(0);
 
-        let mut functions = vec![self.tendermint_update(&req.dst_client_id, target).await?];
-        functions.extend(self.cosmos_messages(&selected).await?);
+        if !expired.is_empty() {
+            let latest = self.api.get_cosmos_latest_height().await.map_err(|error| {
+                tracing::error!(%error, "get_cosmos_latest_height failed");
+                Status::internal(format!("get_cosmos_latest_height failed: {error}"))
+            })?;
+            target = target.max(latest);
+        }
+
+        let trusted = self.trusted_height(&req.dst_client_id).await?;
+
+        let mut functions = Vec::new();
+
+        let proof_height = if trusted >= target {
+            trusted
+        } else {
+            functions.push(
+                self.tendermint_update(&req.dst_client_id, trusted, target)
+                    .await?,
+            );
+            target
+        };
+
+        functions.extend(self.cosmos_messages(&selected, proof_height).await?);
+        functions.extend(self.timeout_messages(&expired, proof_height).await?);
 
         tracing::debug!(
             src_chain = %req.src_chain,
@@ -300,20 +475,16 @@ impl RelayHandler {
         }))
     }
 
-    async fn tendermint_update(
-        &self,
-        client_id: &str,
-        height: u64,
-    ) -> Result<HostFunction, Status> {
+    async fn trusted_height(&self, client_id: &str) -> Result<u64, Status> {
         if client_id.is_empty() {
             return Err(Status::invalid_argument(
                 "dst_client_id is required to update the tendermint client",
             ));
         }
 
-        let trusted = self
+        Ok(self
             .api
-            .get_client_state_xdr(&self.ibc_contract_id, &self.cosmos_signer, client_id)
+            .get_client_state_xdr(&self.ibc_contract_id, self.source_account(), client_id)
             .await
             .map_err(|error| {
                 Status::failed_precondition(format!(
@@ -324,15 +495,100 @@ impl RelayHandler {
                 AnyClientState::from_soroban_xdr(&xdr)
                     .map_err(|e| Status::internal(format!("decode client state: {e}")))
             })?
-            .latest_height();
+            .latest_height())
+    }
 
-        if trusted >= height {
-            return Err(Status::failed_precondition(format!(
-                "client {client_id} already trusts height {trusted}, at or beyond the packet \
-                 height {height}; nothing to update"
-            )));
+    async fn cosmos_proof_at(
+        &self,
+        key: &[u8],
+        proof_height: u64,
+    ) -> Result<(Vec<u8>, Vec<u8>), Status> {
+        let read_at = proof_height.saturating_sub(1);
+
+        self.api
+            .get_cosmos_proof(key, read_at)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, height = read_at, "cosmos proof failed");
+                Status::internal(format!("cosmos proof failed: {error}"))
+            })
+    }
+
+    async fn expired_stellar_packets(
+        &self,
+        req: &RelayByTxRequest,
+    ) -> Result<Vec<PacketEvent>, Status> {
+        if req.timeout_tx_ids.is_empty() {
+            return Ok(Vec::new());
         }
 
+        let tx_hashes: Vec<String> = req.timeout_tx_ids.iter().map(hex::encode).collect();
+
+        let found = events::packet_events_in_txs(
+            &self.api,
+            &self.ibc_contract_id,
+            &tx_hashes,
+            self.event_lookback_ledgers,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "fetching stellar packet events failed");
+            Status::internal(format!("fetching stellar packet events failed: {error}"))
+        })?;
+
+        Ok(found
+            .into_iter()
+            .filter(|event| event.kind == SEND_PACKET)
+            .filter(|event| {
+                req.dst_packet_sequences.is_empty()
+                    || req.dst_packet_sequences.contains(&event.packet.sequence)
+            })
+            .collect())
+    }
+
+    async fn timeout_messages(
+        &self,
+        events: &[PacketEvent],
+        proof_height: u64,
+    ) -> Result<Vec<HostFunction>, Status> {
+        let mut functions = Vec::new();
+
+        for event in events {
+            let key =
+                packet_receipt_path(event.packet.dest_client.as_bytes(), event.packet.sequence);
+
+            let (receipt, proof) = self.cosmos_proof_at(&key, proof_height).await?;
+
+            if !receipt.is_empty() {
+                return Err(Status::failed_precondition(format!(
+                    "packet {} on {} was received on cosmos and cannot be timed out",
+                    event.packet.sequence, event.packet.dest_client
+                )));
+            }
+
+            let packet = msg::packet_to_scval(&msg::to_proto_packet(&event.packet))
+                .map_err(|e| Status::internal(format!("packet to ScVal: {e}")))?;
+
+            functions.push(host_function(
+                &self.ibc_contract_id,
+                "timeout_packet",
+                vec![
+                    packet,
+                    scval_bytes(&proof).map_err(|e| Status::internal(format!("proof: {e}")))?,
+                    ScVal::U64(proof_height),
+                ],
+            )?);
+        }
+
+        Ok(functions)
+    }
+
+    async fn tendermint_update(
+        &self,
+        client_id: &str,
+        trusted: u64,
+        height: u64,
+    ) -> Result<HostFunction, Status> {
         let header = self
             .api
             .get_cosmos_header(height, trusted)
@@ -358,6 +614,7 @@ impl RelayHandler {
     async fn cosmos_messages(
         &self,
         events: &[CosmosPacketEvent],
+        proof_height: u64,
     ) -> Result<Vec<HostFunction>, Status> {
         let mut functions = Vec::new();
 
@@ -377,19 +634,12 @@ impl RelayHandler {
                 _ => continue,
             };
 
-            let (value, proof) = self
-                .api
-                .get_cosmos_proof(&key, event.height)
-                .await
-                .map_err(|error| {
-                    tracing::error!(%error, height = event.height, "cosmos proof failed");
-                    Status::internal(format!("cosmos proof failed: {error}"))
-                })?;
+            let (value, proof) = self.cosmos_proof_at(&key, proof_height).await?;
 
             if value.is_empty() {
                 return Err(Status::failed_precondition(format!(
                     "cosmos has no value committed at the requested path in block {}",
-                    event.height
+                    proof_height.saturating_sub(1)
                 )));
             }
 
@@ -404,7 +654,7 @@ impl RelayHandler {
                 );
             }
             args.push(scval_bytes(&proof).map_err(|e| Status::internal(format!("proof: {e}")))?);
-            args.push(ScVal::U64(event.height));
+            args.push(ScVal::U64(proof_height));
 
             functions.push(host_function(&self.ibc_contract_id, method, args)?);
         }
@@ -412,20 +662,27 @@ impl RelayHandler {
         Ok(functions)
     }
 
-    async fn refreshable_ledger(&self) -> Result<u32, Status> {
-        let latest = self
+    async fn servable_ledger(&self) -> Result<u32, Status> {
+        let published = self
             .api
-            .get_latest_ledger()
+            .get_archive_latest_ledger()
             .await
-            .map_err(|error| Status::internal(format!("get_latest_ledger failed: {error}")))?;
+            .map_err(|error| {
+                Status::internal(format!("get_archive_latest_ledger failed: {error}"))
+            })?;
 
-        if latest < 2 {
+        if published < 2 {
             return Err(Status::failed_precondition(format!(
-                "ledger {latest} has no closed successor to bind it; nothing to update to"
+                "the history archive has published only through ledger {published}; there is no \
+                 ledger whose SCP evidence can be fetched yet"
             )));
         }
 
-        Ok(latest - 1)
+        Ok(published - 1)
+    }
+
+    async fn refreshable_ledger(&self) -> Result<u32, Status> {
+        self.servable_ledger().await
     }
 }
 
@@ -636,10 +893,15 @@ impl ProofApiService for RelayHandler {
     ) -> Result<Response<CreateClientResponse>, Status> {
         let req = request.into_inner();
 
+        if req.src_chain == self.cosmos_chain_id && req.dst_chain == self.stellar_chain_id {
+            return self.tendermint_genesis_for_stellar(&req.parameters).await;
+        }
+
         if req.src_chain != self.stellar_chain_id || req.dst_chain != self.cosmos_chain_id {
             return Err(Status::unimplemented(format!(
-                "create_client only builds the stellar client on {}, got ({}, {})",
-                self.cosmos_chain_id, req.src_chain, req.dst_chain
+                "create_client builds the stellar client on {} or the tendermint client on {}, \
+                 got ({}, {})",
+                self.cosmos_chain_id, self.stellar_chain_id, req.src_chain, req.dst_chain
             )));
         }
 
@@ -651,15 +913,11 @@ impl ProofApiService for RelayHandler {
         let checksum = hex::decode(checksum.trim())
             .map_err(|e| Status::invalid_argument(format!("parameters.wasm_checksum: {e}")))?;
 
-        let latest = self
-            .api
-            .get_latest_ledger()
-            .await
-            .map_err(|error| Status::internal(format!("get_latest_ledger failed: {error}")))?;
+        let servable = self.servable_ledger().await?;
         let slot = u32::try_from(parameter_u64(
             &req.parameters,
             "height",
-            u64::from(latest.saturating_sub(1)),
+            u64::from(servable),
         )?)
         .map_err(|_| Status::invalid_argument("parameters.height does not fit in u32"))?;
         let max_consensus_age = parameter_u64(
@@ -714,10 +972,17 @@ impl ProofApiService for RelayHandler {
     ) -> Result<Response<UpdateClientResponse>, Status> {
         let req = request.into_inner();
 
+        if req.src_chain == self.cosmos_chain_id && req.dst_chain == self.stellar_chain_id {
+            return self
+                .tendermint_refresh_for_stellar(&req.dst_client_id)
+                .await;
+        }
+
         if req.src_chain != self.stellar_chain_id || req.dst_chain != self.cosmos_chain_id {
             return Err(Status::unimplemented(format!(
-                "update_client only refreshes the stellar client on {}, got ({}, {})",
-                self.cosmos_chain_id, req.src_chain, req.dst_chain
+                "update_client refreshes the stellar client on {} or the tendermint client on {}, \
+                 got ({}, {})",
+                self.cosmos_chain_id, self.stellar_chain_id, req.src_chain, req.dst_chain
             )));
         }
 

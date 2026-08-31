@@ -49,6 +49,7 @@ async fn start_with(latest: u32, meta: Vec<u8>) -> GatewayTest {
     let t = GatewayTest::start(Some(ROUTER)).await;
     t.with_data(|d| {
         d.latest_ledger = latest;
+        d.archive_latest_ledger = latest;
         d.archive_scp = archive.scp;
         d.archive_headers = archive.headers;
         d.archive_tx_sets = archive.tx_sets;
@@ -324,7 +325,7 @@ async fn update_client_rejects_an_unknown_chain_pair() {
     let err = t
         .relay()
         .update_client(UpdateClientRequest {
-            src_chain: COSMOS.to_string(),
+            src_chain: "some-other-chain".to_string(),
             dst_chain: STELLAR.to_string(),
             dst_client_id: "07-tendermint-0".to_string(),
         })
@@ -335,13 +336,38 @@ async fn update_client_rejects_an_unknown_chain_pair() {
 }
 
 #[tokio::test]
+async fn update_client_refreshes_the_tendermint_client_on_stellar() {
+    let t = start_timeout(None).await;
+
+    let resp = t
+        .relay()
+        .update_client(UpdateClientRequest {
+            src_chain: COSMOS.to_string(),
+            dst_chain: STELLAR.to_string(),
+            dst_client_id: TENDERMINT_CLIENT.to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        resp.address,
+        stellar_strkey::Contract(ROUTER).to_string().as_str()
+    );
+
+    let functions = host_functions(&resp.tx);
+    assert_eq!(functions.len(), 1);
+    assert_eq!(invocation(&functions[0]).0, "update_client");
+}
+
+#[tokio::test]
 async fn create_client_rejects_an_unknown_chain_pair() {
     let t = start().await;
 
     let err = t
         .relay()
         .create_client(CreateClientRequest {
-            src_chain: COSMOS.to_string(),
+            src_chain: "some-other-chain".to_string(),
             dst_chain: STELLAR.to_string(),
             parameters: parameters(one_config()),
         })
@@ -349,6 +375,34 @@ async fn create_client_rejects_an_unknown_chain_pair() {
         .unwrap_err();
 
     assert_eq!(err.code(), Code::Unimplemented);
+}
+
+// ICS-02 is symmetric across the pair: the same spec'd method builds the
+// tendermint client for stellar that builds the stellar client for cosmos.
+#[tokio::test]
+async fn create_client_builds_the_tendermint_client_for_stellar() {
+    let t = start_timeout(None).await;
+
+    let resp = t
+        .relay()
+        .create_client(CreateClientRequest {
+            src_chain: COSMOS.to_string(),
+            dst_chain: STELLAR.to_string(),
+            parameters: std::collections::HashMap::new(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        resp.address,
+        stellar_strkey::Contract(ROUTER).to_string().as_str()
+    );
+
+    assert!(
+        !resp.tx.is_empty(),
+        "create_client must return a prepared transaction the caller can sign"
+    );
 }
 
 fn cosmos_packet_proto(sequence: u64, source: &str, dest: &str) -> Vec<u8> {
@@ -405,6 +459,7 @@ async fn start_cosmos(events: serde_json::Value) -> GatewayTest {
             (vec![1u8], vec![8u8; 40]),
         );
         d.cosmos_headers.insert(120, tendermint_header_proto(120));
+        d.cosmos_headers.insert(121, tendermint_header_proto(121));
         d.client_states.insert(
             TENDERMINT_CLIENT.to_string(),
             super::query::client_state_xdr(),
@@ -538,6 +593,7 @@ fn tendermint_header_proto(height: i64) -> Vec<u8> {
     use tendermint_proto::types::{Header as TmHeader, SignedHeader, ValidatorSet};
 
     let header = TmHeader {
+        chain_id: COSMOS.to_string(),
         height,
         time: Some(Timestamp {
             seconds: 1_800_000_000,
@@ -619,8 +675,11 @@ async fn relay_from_cosmos_rejects_an_unregistered_client() {
     );
 }
 
+// A retry arrives after the failed attempt's update_client already landed, so
+// the client is at or past the packet height. The commitment is still on cosmos:
+// prove it where the client already is rather than refusing forever.
 #[tokio::test]
-async fn relay_from_cosmos_rejects_a_client_already_past_the_packet() {
+async fn relay_from_cosmos_proves_at_the_height_a_client_already_trusts() {
     let t = start_cosmos(json!({
         "events": [{
             "kind": "send_packet",
@@ -631,16 +690,234 @@ async fn relay_from_cosmos_rejects_a_client_already_past_the_packet() {
     }))
     .await;
 
-    let err = t
+    let resp = t
         .relay()
         .relay_by_tx(cosmos_request(TENDERMINT_CLIENT))
         .await
-        .unwrap_err();
+        .unwrap()
+        .into_inner();
+
+    let functions = host_functions(&resp.tx);
+
+    assert_eq!(
+        functions.len(),
+        1,
+        "a client already past the packet needs no update, only the recv"
+    );
+
+    let (method, args) = invocation(&functions[0]);
+    assert_eq!(method, "recv_packet");
+    assert_eq!(args, 3);
+
+    let soroban_client::xdr::HostFunction::InvokeContract(call) = &functions[0] else {
+        panic!("expected a contract invocation");
+    };
+
+    assert_eq!(
+        call.args[2],
+        soroban_client::xdr::ScVal::U64(super::mock::FIXTURE_LATEST_HEIGHT),
+        "the proof must be taken at the height the client trusts, not the packet's"
+    );
+}
+
+const STELLAR_SEND_TX: &str = "deadbeef";
+
+const TIMEOUT_SEQUENCE: u64 = 5;
+
+fn stellar_send_event(source: &str, dest: &str, sequence: u64) -> serde_json::Value {
+    use soroban_client::xdr::ScVal;
+    use stellar_ibc_core::conversion::{
+        scval_bytes, scval_string, scval_struct, scval_symbol, scval_to_xdr, scval_vec,
+    };
+
+    let payload = scval_struct(vec![
+        ("source_port", scval_string("transfer").unwrap()),
+        ("dest_port", scval_string("transfer").unwrap()),
+        ("version", scval_string("ics20-1").unwrap()),
+        ("encoding", scval_string("application/json").unwrap()),
+        (
+            "value",
+            scval_bytes(br#"{"denom":"native","amount":"5"}"#).unwrap(),
+        ),
+    ])
+    .unwrap();
+
+    let packet = scval_struct(vec![
+        ("sequence", ScVal::U64(sequence)),
+        ("source_client", scval_string(source).unwrap()),
+        ("dest_client", scval_string(dest).unwrap()),
+        ("timeout_timestamp", ScVal::U64(1_700_000_000)),
+        ("payloads", scval_vec(vec![payload]).unwrap()),
+    ])
+    .unwrap();
+
+    json!({
+        "id": "t1",
+        "ledger": LEDGER,
+        "ledger_closed_at": "2026-01-01T00:00:00Z",
+        "contract_id": stellar_strkey::Contract(ROUTER).to_string().as_str(),
+        "tx_hash": STELLAR_SEND_TX,
+        "topics_xdr": [hex::encode(scval_to_xdr(&scval_symbol("send_packet").unwrap()).unwrap())],
+        "value_xdr": hex::encode(
+            scval_to_xdr(&scval_struct(vec![("packet", packet)]).unwrap()).unwrap(),
+        ),
+    })
+}
+
+async fn start_timeout(receipt: Option<Vec<u8>>) -> GatewayTest {
+    let t = start().await;
+    t.with_data(|d| {
+        d.prepare_tx_xdr = vec![0xAB; 32];
+        d.events.push(stellar_send_event(
+            "07-tendermint-0",
+            "08-wasm-0",
+            TIMEOUT_SEQUENCE,
+        ));
+        d.cosmos_latest_height = 120;
+        d.cosmos_headers.insert(120, tendermint_header_proto(120));
+        d.cosmos_proofs.insert(
+            stellar_ibc_core::commitment::packet_receipt_path(b"08-wasm-0", TIMEOUT_SEQUENCE),
+            (receipt.unwrap_or_default(), vec![7u8; 40]),
+        );
+        d.client_states.insert(
+            TENDERMINT_CLIENT.to_string(),
+            super::query::client_state_xdr(),
+        );
+    });
+    t
+}
+
+fn timeout_request() -> ipsa_gateway::proto::proofapi::RelayByTxRequest {
+    ipsa_gateway::proto::proofapi::RelayByTxRequest {
+        src_chain: COSMOS.to_string(),
+        dst_chain: STELLAR.to_string(),
+        source_tx_ids: Vec::new(),
+        timeout_tx_ids: vec![hex::decode(STELLAR_SEND_TX).unwrap()],
+        src_client_id: String::new(),
+        dst_client_id: TENDERMINT_CLIENT.to_string(),
+        src_packet_sequences: Vec::new(),
+        dst_packet_sequences: vec![TIMEOUT_SEQUENCE],
+    }
+}
+
+#[tokio::test]
+async fn a_timeout_builds_a_timeout_packet_invocation() {
+    let t = start_timeout(None).await;
+
+    let resp = t
+        .relay()
+        .relay_by_tx(timeout_request())
+        .await
+        .unwrap()
+        .into_inner();
+
+    let functions = host_functions(&resp.tx);
+    assert_eq!(functions.len(), 2);
+
+    assert_eq!(invocation(&functions[0]).0, "update_client");
+
+    let (method, args) = invocation(&functions[1]);
+    assert_eq!(method, "timeout_packet");
+    assert_eq!(
+        args, 3,
+        "timeout_packet takes packet, proof and proof height"
+    );
+}
+
+#[tokio::test]
+async fn a_timeout_proves_absence_at_the_updated_height() {
+    let t = start_timeout(None).await;
+
+    let resp = t
+        .relay()
+        .relay_by_tx(timeout_request())
+        .await
+        .unwrap()
+        .into_inner();
+
+    let functions = host_functions(&resp.tx);
+    let soroban_client::xdr::HostFunction::InvokeContract(args) = &functions[1] else {
+        panic!("expected a contract invocation");
+    };
+
+    assert_eq!(args.args[2], soroban_client::xdr::ScVal::U64(120));
+}
+
+#[tokio::test]
+async fn a_delivered_packet_is_not_timed_out() {
+    let t = start_timeout(Some(vec![1u8])).await;
+
+    let err = t.relay().relay_by_tx(timeout_request()).await.unwrap_err();
 
     assert_eq!(err.code(), Code::FailedPrecondition);
     assert!(
-        err.message().contains("already trusts height"),
+        err.message().contains("cannot be timed out"),
         "got: {}",
         err.message()
+    );
+}
+
+#[tokio::test]
+async fn a_timeout_for_an_unknown_tx_is_not_found() {
+    let t = start_timeout(None).await;
+
+    let mut req = timeout_request();
+    req.timeout_tx_ids = vec![hex::decode("0102").unwrap()];
+
+    let err = t.relay().relay_by_tx(req).await.unwrap_err();
+
+    assert_eq!(err.code(), Code::NotFound);
+}
+
+#[tokio::test]
+async fn a_timeout_skips_a_sequence_it_was_not_asked_for() {
+    let t = start_timeout(None).await;
+
+    let mut req = timeout_request();
+    req.dst_packet_sequences = vec![TIMEOUT_SEQUENCE + 1];
+
+    let err = t.relay().relay_by_tx(req).await.unwrap_err();
+
+    assert_eq!(err.code(), Code::NotFound);
+}
+
+// An ABCI query at height H is committed by the app hash in header H+1, so the
+// proof behind a message submitted at proof_height must be read one block below
+// it. Getting this wrong verifies against the wrong root and fails on chain.
+#[tokio::test]
+async fn a_cosmos_proof_is_read_one_block_below_the_height_it_is_verified_at() {
+    let t = start_cosmos(json!({
+        "events": [{
+            "kind": "send_packet",
+            "height": 5,
+            "packet_proto": hex::encode(cosmos_packet_proto(1, "07-tendermint-0", "08-wasm-0")),
+            "acknowledgements": [],
+        }],
+    }))
+    .await;
+
+    let resp = t
+        .relay()
+        .relay_by_tx(cosmos_request(TENDERMINT_CLIENT))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let functions = host_functions(&resp.tx);
+    let soroban_client::xdr::HostFunction::InvokeContract(call) = functions.last().unwrap() else {
+        panic!("expected a contract invocation");
+    };
+
+    let submitted = match &call.args[2] {
+        soroban_client::xdr::ScVal::U64(height) => *height,
+        other => panic!("expected a u64 proof height, got {other:?}"),
+    };
+
+    let queried = t.with_data(|d| d.cosmos_proof_heights.clone());
+
+    assert_eq!(
+        queried,
+        vec![submitted - 1],
+        "the proof must be read at proof_height - 1, not at proof_height"
     );
 }

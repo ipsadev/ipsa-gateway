@@ -65,6 +65,8 @@ pub struct MockData {
     pub cosmos_packets: HashMap<String, Value>,
     pub cosmos_proofs: HashMap<Vec<u8>, (Vec<u8>, Vec<u8>)>,
     pub cosmos_headers: HashMap<u64, Vec<u8>>,
+    pub cosmos_latest_height: u64,
+    pub cosmos_proof_heights: Vec<u64>,
 }
 
 pub struct GatewayTest {
@@ -87,11 +89,12 @@ impl GatewayTest {
             api_url,
             ibc_contract_id: id_string,
             transfer_contract_id: String::new(),
-            source_account: String::new(),
+            source_account: "GBXDMJBUPSBOG23CYLZDFR5SHS33USHQRSI4XGZUL75SHARCTDPGA22H".to_string(),
             stellar_chain_id: "stellar-testnet".to_string(),
             cosmos_chain_id: "simd-1".to_string(),
             event_lookback_ledgers: 17280,
             cosmos_signer: String::new(),
+            router_genesis_ledger: None,
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -157,6 +160,7 @@ async fn start_mock_api() -> (String, Arc<Mutex<MockData>>) {
             get(archive_ledger_header),
         )
         .route("/archive/tx-set/{ledger}", get(archive_tx_set))
+        .route("/cosmos/latest", get(cosmos_latest))
         .route("/cosmos/tx/{hash}/packets", get(cosmos_packets))
         .route("/cosmos/proof", get(cosmos_proof))
         .route("/cosmos/header/{height}", get(cosmos_header))
@@ -561,6 +565,11 @@ fn archive_lookup(
     }
 }
 
+async fn cosmos_latest(AxState(data): AxState<Arc<Mutex<MockData>>>) -> Json<Value> {
+    let d = data.lock().unwrap();
+    Json(json!({ "height": d.cosmos_latest_height }))
+}
+
 async fn cosmos_packets(
     AxState(data): AxState<Arc<Mutex<MockData>>>,
     Path(hash): Path<String>,
@@ -578,7 +587,12 @@ async fn cosmos_proof(
     AxState(data): AxState<Arc<Mutex<MockData>>>,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Json<Value> {
-    let d = data.lock().unwrap();
+    let mut d = data.lock().unwrap();
+
+    if let Some(height) = params.get("height").and_then(|h| h.parse::<u64>().ok()) {
+        d.cosmos_proof_heights.push(height);
+    }
+
     let key = hex::decode(params.get("key").cloned().unwrap_or_default()).unwrap_or_default();
     let (value, proof) = d.cosmos_proofs.get(&key).cloned().unwrap_or_default();
     Json(json!({ "value": hex::encode(value), "proof": hex::encode(proof) }))

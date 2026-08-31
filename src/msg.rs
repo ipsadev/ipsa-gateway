@@ -18,14 +18,21 @@ pub struct MsgHandler {
     pub api: ApiClient,
     pub ibc_contract_id: String,
     pub transfer_contract_id: String,
+    pub cosmos_chain_id: String,
 }
 
 impl MsgHandler {
-    pub fn new(api: ApiClient, ibc_contract_id: String, transfer_contract_id: String) -> Self {
+    pub fn new(
+        api: ApiClient,
+        ibc_contract_id: String,
+        transfer_contract_id: String,
+        cosmos_chain_id: String,
+    ) -> Self {
         Self {
             api,
             ibc_contract_id,
             transfer_contract_id,
+            cosmos_chain_id,
         }
     }
 
