@@ -23,7 +23,7 @@ use stellar_ibc_core::ibc::msg::{self, ProtoAny};
 use stellar_ibc_core::ibc::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
 use stellar_ibc_core::ibc::soroban::tendermint_header_to_soroban_xdr;
 use stellar_ibc_core::ibc::tendermint::{tendermint_genesis, TendermintBootstrap};
-use stellar_ibc_core::ibc::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket};
+use stellar_ibc_core::ibc::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket, MsgTimeout};
 use stellar_ibc_core::state::{PathLookup, State};
 
 use crate::proto::proofapi::{
@@ -254,6 +254,26 @@ impl RelayHandler {
         }
     }
 
+    async fn absence_proof_at(&self, ledger: u32, key: &[u8]) -> Result<Vec<u8>, Status> {
+        let lookup = self
+            .state
+            .lock()
+            .await
+            .proof_for_path(ledger, key)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, ledger, "proof_for_path failed");
+                Status::internal(format!("proof_for_path failed: {error}"))
+            })?;
+
+        match lookup {
+            PathLookup::Absent { proof_bytes } => Ok(proof_bytes),
+            PathLookup::Found { .. } => Err(Status::failed_precondition(format!(
+                "the packet was received in ledger {ledger} and cannot be timed out"
+            ))),
+        }
+    }
+
     async fn proof_at(&self, ledger: u32, key: &[u8]) -> Result<Vec<u8>, Status> {
         let lookup = self
             .state
@@ -272,6 +292,66 @@ impl RelayHandler {
                 "no value committed at the requested path in ledger {ledger}"
             ))),
         }
+    }
+
+    async fn expired_cosmos_packets(
+        &self,
+        req: &RelayByTxRequest,
+    ) -> Result<Vec<CosmosPacketEvent>, Status> {
+        if req.timeout_tx_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut found = Vec::new();
+
+        for hash in &req.timeout_tx_ids {
+            let events = self
+                .api
+                .get_cosmos_packet_events(&hex::encode(hash))
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, "fetching cosmos packet events failed");
+                    Status::internal(format!("fetching cosmos packet events failed: {error}"))
+                })?;
+
+            found.extend(events);
+        }
+
+        Ok(found
+            .into_iter()
+            .filter(|event| event.kind == COSMOS_SEND_PACKET)
+            .filter(|event| {
+                req.dst_packet_sequences.is_empty()
+                    || req.dst_packet_sequences.contains(&event.packet.sequence)
+            })
+            .collect())
+    }
+
+    async fn cosmos_timeout_messages(
+        &self,
+        packets: &[CosmosPacketEvent],
+        ledger: u32,
+    ) -> Result<Vec<MsgTimeout>, Status> {
+        let height = Height {
+            revision_number: 0,
+            revision_height: u64::from(ledger),
+        };
+
+        let mut timeouts = Vec::new();
+
+        for event in packets {
+            let key =
+                packet_receipt_path(event.packet.dest_client.as_bytes(), event.packet.sequence);
+
+            timeouts.push(MsgTimeout {
+                packet: Some(event.packet.clone()),
+                proof_unreceived: self.absence_proof_at(ledger, &key).await?,
+                proof_height: Some(height.clone()),
+                signer: self.cosmos_signer.clone(),
+            });
+        }
+
+        Ok(timeouts)
     }
 
     async fn stellar_messages(
@@ -859,14 +939,20 @@ impl ProofApiService for RelayHandler {
         })?;
 
         let packets = filter_sequences(found, &req.src_packet_sequences, &req.dst_packet_sequences);
+        let expired = self.expired_cosmos_packets(&req).await?;
 
-        let Some(ledger) = proof_ledger(&packets) else {
-            return Err(Status::not_found(
-                "no packet events found in the requested transactions",
-            ));
+        let ledger = match proof_ledger(&packets) {
+            Some(ledger) => ledger,
+            None if !expired.is_empty() => self.servable_ledger().await?,
+            None => {
+                return Err(Status::not_found(
+                    "no packet events found in the requested transactions",
+                ))
+            }
         };
 
         let (recv, ack) = self.stellar_messages(&packets, ledger).await?;
+        let timeout = self.cosmos_timeout_messages(&expired, ledger).await?;
         let update = self.update_for(&req.dst_client_id, ledger).await?;
 
         tracing::debug!(
@@ -880,7 +966,7 @@ impl ProofApiService for RelayHandler {
             "relay_by_tx built cosmos messages"
         );
 
-        let tx = msg::encode_tx_body(Some(update), recv, ack);
+        let tx = msg::encode_tx_body_with_timeouts(Some(update), recv, ack, timeout);
 
         Ok(Response::new(RelayByTxResponse {
             tx,
