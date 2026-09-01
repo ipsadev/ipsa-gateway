@@ -814,6 +814,7 @@ impl ProofApiService for RelayHandler {
         }))
     }
 
+    #[tracing::instrument(skip(self, request), name = "grpc.relay_by_tx", fields(src_chain = %request.get_ref().src_chain, dst_chain = %request.get_ref().dst_chain))]
     async fn relay_by_tx(
         &self,
         request: Request<RelayByTxRequest>,
@@ -887,6 +888,7 @@ impl ProofApiService for RelayHandler {
         }))
     }
 
+    #[tracing::instrument(skip(self, request), name = "grpc.create_client", fields(src_chain = %request.get_ref().src_chain, dst_chain = %request.get_ref().dst_chain))]
     async fn create_client(
         &self,
         request: Request<CreateClientRequest>,
@@ -966,6 +968,7 @@ impl ProofApiService for RelayHandler {
         }))
     }
 
+    #[tracing::instrument(skip(self, request), name = "grpc.update_client", fields(src_chain = %request.get_ref().src_chain, dst_chain = %request.get_ref().dst_chain, dst_client_id = %request.get_ref().dst_client_id))]
     async fn update_client(
         &self,
         request: Request<UpdateClientRequest>,
