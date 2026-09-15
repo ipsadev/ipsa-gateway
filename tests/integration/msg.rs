@@ -1,16 +1,16 @@
 use soroban_client::xdr::ScVal;
 use tonic::Code;
 
+use ipsa_core::conversion::{
+    scval_as_bytes, scval_bytes, scval_from_xdr, scval_string, scval_to_xdr, scval_vec_of_bytes,
+};
+use ipsa_core::ibc::client_state::AnyClientState;
+use ipsa_core::ibc::consensus_state::AnyConsensusState;
 use ipsa_gateway::proto::{
     MsgAckPacketRequest, MsgCreateClientRequest, MsgRecvPacketRequest,
     MsgRegisterCounterpartyRequest, MsgSubmitMisbehaviourRequest, MsgTimeoutPacketRequest,
     MsgUpdateClientRequest, SubmitSignedTxRequest,
 };
-use stellar_ibc_core::conversion::{
-    scval_as_bytes, scval_bytes, scval_from_xdr, scval_string, scval_to_xdr, scval_vec_of_bytes,
-};
-use stellar_ibc_core::ibc::client_state::AnyClientState;
-use stellar_ibc_core::ibc::consensus_state::AnyConsensusState;
 
 use super::mock::{
     sample_packet, tm_client_state_protobuf, tm_consensus_state_protobuf, GatewayTest,

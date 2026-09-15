@@ -1,10 +1,10 @@
 use anyhow::Result;
 
-use stellar_ibc_core::api_client::ApiClient;
-use stellar_ibc_core::ibc::packet::{
+use ipsa_core::api_client::ApiClient;
+use ipsa_core::ibc::packet::{
     decode_acknowledgements, decode_packet, event_kind, PacketEvent, SEND_PACKET, WRITE_ACK,
 };
-use stellar_ibc_core::types::{EventCursor, EventRecord};
+use ipsa_core::types::{EventCursor, EventRecord};
 
 const PAGE_LIMIT: u32 = 200;
 const MAX_PAGES: usize = 50;

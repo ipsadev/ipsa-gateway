@@ -14,7 +14,7 @@ use crate::proto::{
     QueryPacketCommitmentResponse, QueryPacketReceiptRequest, QueryPacketReceiptResponse,
     QueryStellarClientParamsRequest, QueryStellarClientParamsResponse,
 };
-use stellar_ibc_core::{
+use ipsa_core::{
     api_client::ApiClient,
     commitment::{ack_commitment_path, packet_commitment_path, packet_receipt_path},
     ibc::event::event_attributes,
@@ -143,7 +143,7 @@ impl StellarGatewayQuery for QueryHandler {
             .await
             .map_err(|error| Status::internal(format!("get client state: {error}")))?;
 
-        let cs = stellar_ibc_core::ibc::client_state::AnyClientState::from_soroban_xdr(&xdr)
+        let cs = ipsa_core::ibc::client_state::AnyClientState::from_soroban_xdr(&xdr)
             .map_err(|error| Status::internal(format!("decode soroban client state: {error}")))?;
 
         let client_state =
@@ -182,14 +182,13 @@ impl StellarGatewayQuery for QueryHandler {
                     continue;
                 }
             };
-            let cs =
-                match stellar_ibc_core::ibc::client_state::AnyClientState::from_soroban_xdr(&xdr) {
-                    Ok(cs) => cs,
-                    Err(error) => {
-                        tracing::warn!(%client_id, %error, "skipping client: decode failed");
-                        continue;
-                    }
-                };
+            let cs = match ipsa_core::ibc::client_state::AnyClientState::from_soroban_xdr(&xdr) {
+                Ok(cs) => cs,
+                Err(error) => {
+                    tracing::warn!(%client_id, %error, "skipping client: decode failed");
+                    continue;
+                }
+            };
             let client_state =
                 ibc::primitives::proto::Protobuf::<ibc::primitives::proto::Any>::encode_vec(cs);
             client_states.push(IdentifiedClientState {
@@ -224,7 +223,7 @@ impl StellarGatewayQuery for QueryHandler {
             .await
             .map_err(|error| Status::not_found(format!("consensus state fetch failed: {error}")))?;
 
-        let cs = stellar_ibc_core::ibc::consensus_state::AnyConsensusState::from_soroban_xdr(&xdr)
+        let cs = ipsa_core::ibc::consensus_state::AnyConsensusState::from_soroban_xdr(&xdr)
             .map_err(|error| Status::internal(format!("consensus state decode failed: {error}")))?;
         let consensus_state =
             ibc::primitives::proto::Protobuf::<ibc::primitives::proto::Any>::encode_vec(cs);

@@ -13,18 +13,16 @@ use soroban_client::xdr::{
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use stellar_ibc_core::api_client::{ApiClient, CosmosPacketEvent};
-use stellar_ibc_core::commitment::{
-    ack_commitment_path, packet_commitment_path, packet_receipt_path,
-};
-use stellar_ibc_core::conversion::{scval_bytes, scval_string, scval_u64, scval_vec_of_bytes};
-use stellar_ibc_core::ibc::client_state::AnyClientState;
-use stellar_ibc_core::ibc::msg::{self, ProtoAny};
-use stellar_ibc_core::ibc::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
-use stellar_ibc_core::ibc::soroban::tendermint_header_to_soroban_xdr;
-use stellar_ibc_core::ibc::tendermint::{tendermint_genesis, TendermintBootstrap};
-use stellar_ibc_core::ibc::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket, MsgTimeout};
-use stellar_ibc_core::state::{PathLookup, State};
+use ipsa_core::api_client::{ApiClient, CosmosPacketEvent};
+use ipsa_core::commitment::{ack_commitment_path, packet_commitment_path, packet_receipt_path};
+use ipsa_core::conversion::{scval_bytes, scval_string, scval_u64, scval_vec_of_bytes};
+use ipsa_core::ibc::client_state::AnyClientState;
+use ipsa_core::ibc::msg::{self, ProtoAny};
+use ipsa_core::ibc::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
+use ipsa_core::ibc::soroban::tendermint_header_to_soroban_xdr;
+use ipsa_core::ibc::tendermint::{tendermint_genesis, TendermintBootstrap};
+use ipsa_core::ibc::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket, MsgTimeout};
+use ipsa_core::state::{PathLookup, State};
 
 use crate::proto::proofapi::{
     proof_api_service_server::{ProofApiService, ProofApiServiceServer},
@@ -1095,7 +1093,7 @@ impl ProofApiService for RelayHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellar_ibc_core::ibc::packet::Packet;
+    use ipsa_core::ibc::packet::Packet;
 
     fn event(kind: &str, sequence: u64, ledger: u32) -> PacketEvent {
         PacketEvent {

@@ -32,12 +32,12 @@ use ibc_proto::ibc::lightclients::tendermint::v1::{
     ClientState as RawTmClientState, ConsensusState as RawTmConsensusState, Fraction,
 };
 
+use ipsa_core::conversion::{scval_bytes, scval_struct};
 use ipsa_gateway::config::GatewayConfig;
 use ipsa_gateway::proto::proofapi::proof_api_service_client::ProofApiServiceClient;
 use ipsa_gateway::proto::stellar_gateway_msg_client::StellarGatewayMsgClient;
 use ipsa_gateway::proto::stellar_gateway_query_client::StellarGatewayQueryClient;
 use ipsa_gateway::runner;
-use stellar_ibc_core::conversion::{scval_bytes, scval_struct};
 
 pub struct PrepareCall {
     pub signer: String,

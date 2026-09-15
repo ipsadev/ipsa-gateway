@@ -4,7 +4,7 @@ use prost::Message as _;
 use serde_json::json;
 use tonic::Code;
 
-use stellar_ibc_core::ibc::msg::{
+use ipsa_core::ibc::msg::{
     MsgCreateClient, MsgUpdateClient, ProtoMessage as _, ProtoTxBody, WasmClientMessage,
     WasmClientState, WasmConsensusState,
 };
@@ -406,12 +406,12 @@ async fn create_client_builds_the_tendermint_client_for_stellar() {
 }
 
 fn cosmos_packet_proto(sequence: u64, source: &str, dest: &str) -> Vec<u8> {
-    stellar_ibc_core::ibc::msg::encode_packet(&stellar_ibc_core::ibc::v2_msgs::Packet {
+    ipsa_core::ibc::msg::encode_packet(&ipsa_core::ibc::v2_msgs::Packet {
         sequence,
         source_client: source.to_string(),
         dest_client: dest.to_string(),
         timeout_timestamp: 1_800_000_000,
-        payloads: vec![stellar_ibc_core::ibc::v2_msgs::Payload {
+        payloads: vec![ipsa_core::ibc::v2_msgs::Payload {
             source_port: "transfer".to_string(),
             dest_port: "transfer".to_string(),
             version: "ics20-1".to_string(),
@@ -451,11 +451,11 @@ async fn start_cosmos(events: serde_json::Value) -> GatewayTest {
     t.with_data(|d| {
         d.cosmos_packets.insert(COSMOS_TX.to_string(), events);
         d.cosmos_proofs.insert(
-            stellar_ibc_core::commitment::packet_commitment_path(b"07-tendermint-0", 1),
+            ipsa_core::commitment::packet_commitment_path(b"07-tendermint-0", 1),
             (vec![1u8], vec![9u8; 40]),
         );
         d.cosmos_proofs.insert(
-            stellar_ibc_core::commitment::ack_commitment_path(b"08-wasm-0", 2),
+            ipsa_core::commitment::ack_commitment_path(b"08-wasm-0", 2),
             (vec![1u8], vec![8u8; 40]),
         );
         d.cosmos_headers.insert(120, tendermint_header_proto(120));
@@ -725,10 +725,10 @@ const STELLAR_SEND_TX: &str = "deadbeef";
 const TIMEOUT_SEQUENCE: u64 = 5;
 
 fn stellar_send_event(source: &str, dest: &str, sequence: u64) -> serde_json::Value {
-    use soroban_client::xdr::ScVal;
-    use stellar_ibc_core::conversion::{
+    use ipsa_core::conversion::{
         scval_bytes, scval_string, scval_struct, scval_symbol, scval_to_xdr, scval_vec,
     };
+    use soroban_client::xdr::ScVal;
 
     let payload = scval_struct(vec![
         ("source_port", scval_string("transfer").unwrap()),
@@ -776,7 +776,7 @@ async fn start_timeout(receipt: Option<Vec<u8>>) -> GatewayTest {
         d.cosmos_latest_height = 120;
         d.cosmos_headers.insert(120, tendermint_header_proto(120));
         d.cosmos_proofs.insert(
-            stellar_ibc_core::commitment::packet_receipt_path(b"08-wasm-0", TIMEOUT_SEQUENCE),
+            ipsa_core::commitment::packet_receipt_path(b"08-wasm-0", TIMEOUT_SEQUENCE),
             (receipt.unwrap_or_default(), vec![7u8; 40]),
         );
         d.client_states.insert(

@@ -7,7 +7,7 @@ use tonic::transport::server::Router;
 use tonic::transport::Server;
 
 use crate::{config::GatewayConfig, msg::MsgHandler, query::QueryHandler, relay::RelayHandler};
-use stellar_ibc_core::{api_client::ApiClient, state::State};
+use ipsa_core::{api_client::ApiClient, state::State};
 
 async fn build_router(cfg: &GatewayConfig) -> Router {
     let api = ApiClient::new(&cfg.api_url);
