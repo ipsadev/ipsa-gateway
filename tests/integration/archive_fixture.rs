@@ -129,8 +129,8 @@ pub struct HeaderArchive {
 }
 
 pub fn header_archive(ledger: u32) -> HeaderArchive {
+    use ipsa_scp_verifier::archive::checkpoint_for;
     use sha2::{Digest, Sha256};
-    use stellar_ibc_core::stellar::archive::checkpoint_for;
 
     let validators: Vec<[u8; 32]> = (1..=4u8).map(|i| [i; 32]).collect();
     let qset = quorum_set(&validators, 3);
