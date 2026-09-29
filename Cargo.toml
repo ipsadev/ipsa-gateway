@@ -12,7 +12,8 @@ name = "ipsa-gateway"
 path = "src/main.rs"
 
 [dependencies]
-ipsa-core = { workspace = true }
+ipsa-ibc-core = { workspace = true }
+ipsa-chains = { workspace = true }
 
 tonic = { workspace = true }
 tonic-health = { workspace = true }

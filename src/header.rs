@@ -1,5 +1,5 @@
+use crate::api_client::ApiClient;
 use anyhow::{anyhow, bail, Result};
-use ipsa_core::api_client::ApiClient;
 use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
     ContractEvent, ContractEventBody, InvokeHostFunctionResult, InvokeHostFunctionSuccessPreImage,

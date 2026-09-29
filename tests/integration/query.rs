@@ -6,15 +6,17 @@ use soroban_client::xdr::{
 };
 use tonic::Code;
 
-use ipsa_core::commitment::{ack_commitment_path, packet_commitment_path, packet_receipt_path};
-use ipsa_core::conversion::{
+use ipsa_chains::client_state::AnyClientState;
+use ipsa_chains::conversion::{
     scval_bytes, scval_height, scval_string, scval_struct, scval_symbol, scval_to_xdr, scval_vec,
 };
-use ipsa_core::ibc::client_state::AnyClientState;
 use ipsa_gateway::proto::{
     EventsRequest, LatestHeightRequest, QueryAcknowledgementRequest, QueryClientStateRequest,
     QueryClientStatesRequest, QueryConsensusStateRequest, QueryIbcHeaderRequest,
     QueryNextSeqRecvRequest, QueryPacketCommitmentRequest, QueryPacketReceiptRequest,
+};
+use ipsa_ibc_core::commitment::{
+    acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
 };
 
 use super::mock::{
@@ -566,7 +568,7 @@ async fn packet_receipt_reflects_contract_write() {
 async fn acknowledgement_reflects_contract_write() {
     let contract = [9u8; 32];
     let client_id = "07-tendermint-0";
-    let key = ack_commitment_path(client_id.as_bytes(), 1);
+    let key = acknowledgement_commitment_path(client_id.as_bytes(), 1);
     let meta = ledger_meta_with_write(contract, key, vec![0xEEu8; 32]);
 
     let t = GatewayTest::start(Some(contract)).await;

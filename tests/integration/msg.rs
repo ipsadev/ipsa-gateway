@@ -1,11 +1,11 @@
 use soroban_client::xdr::ScVal;
 use tonic::Code;
 
-use ipsa_core::conversion::{
+use ipsa_chains::client_state::AnyClientState;
+use ipsa_chains::consensus_state::AnyConsensusState;
+use ipsa_chains::conversion::{
     scval_as_bytes, scval_bytes, scval_from_xdr, scval_string, scval_to_xdr, scval_vec_of_bytes,
 };
-use ipsa_core::ibc::client_state::AnyClientState;
-use ipsa_core::ibc::consensus_state::AnyConsensusState;
 use ipsa_gateway::proto::{
     MsgAckPacketRequest, MsgCreateClientRequest, MsgRecvPacketRequest,
     MsgRegisterCounterpartyRequest, MsgSubmitMisbehaviourRequest, MsgTimeoutPacketRequest,

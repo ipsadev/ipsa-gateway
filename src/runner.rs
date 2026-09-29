@@ -6,8 +6,8 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::server::Router;
 use tonic::transport::Server;
 
+use crate::{api_client::ApiClient, state::State};
 use crate::{config::GatewayConfig, msg::MsgHandler, query::QueryHandler, relay::RelayHandler};
-use ipsa_core::{api_client::ApiClient, state::State};
 
 async fn build_router(cfg: &GatewayConfig) -> Router {
     let api = ApiClient::new(&cfg.api_url);

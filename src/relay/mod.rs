@@ -13,16 +13,18 @@ use soroban_client::xdr::{
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use ipsa_core::api_client::{ApiClient, CosmosPacketEvent};
-use ipsa_core::commitment::{ack_commitment_path, packet_commitment_path, packet_receipt_path};
-use ipsa_core::conversion::{scval_bytes, scval_string, scval_u64, scval_vec_of_bytes};
-use ipsa_core::ibc::client_state::AnyClientState;
-use ipsa_core::ibc::msg::{self, ProtoAny};
-use ipsa_core::ibc::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
-use ipsa_core::ibc::soroban::tendermint_header_to_soroban_xdr;
-use ipsa_core::ibc::tendermint::{tendermint_genesis, TendermintBootstrap};
-use ipsa_core::ibc::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket, MsgTimeout};
-use ipsa_core::state::{PathLookup, State};
+use crate::api_client::{ApiClient, CosmosPacketEvent};
+use crate::state::{PathLookup, State};
+use ipsa_chains::client_state::AnyClientState;
+use ipsa_chains::conversion::{scval_bytes, scval_string, scval_u64, scval_vec_of_bytes};
+use ipsa_chains::msg::{self, ProtoAny};
+use ipsa_chains::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
+use ipsa_chains::soroban::tendermint_header_to_soroban_xdr;
+use ipsa_chains::tendermint::{tendermint_genesis, TendermintBootstrap};
+use ipsa_chains::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket, MsgTimeout};
+use ipsa_ibc_core::commitment::{
+    acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
+};
 
 use crate::proto::proofapi::{
     proof_api_service_server::{ProofApiService, ProofApiServiceServer},
@@ -378,7 +380,7 @@ impl RelayHandler {
                     recv.push(message);
                 }
                 WRITE_ACK => {
-                    let key = ack_commitment_path(
+                    let key = acknowledgement_commitment_path(
                         event.packet.dest_client.as_bytes(),
                         event.packet.sequence,
                     );
@@ -706,7 +708,10 @@ impl RelayHandler {
                     "recv_packet",
                 ),
                 COSMOS_WRITE_ACK => (
-                    ack_commitment_path(event.packet.dest_client.as_bytes(), event.packet.sequence),
+                    acknowledgement_commitment_path(
+                        event.packet.dest_client.as_bytes(),
+                        event.packet.sequence,
+                    ),
                     "acknowledge_packet",
                 ),
                 _ => continue,
@@ -1093,7 +1098,7 @@ impl ProofApiService for RelayHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ipsa_core::ibc::packet::Packet;
+    use ipsa_chains::packet::Packet;
 
     fn event(kind: &str, sequence: u64, ledger: u32) -> PacketEvent {
         PacketEvent {

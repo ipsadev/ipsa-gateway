@@ -14,12 +14,15 @@ use crate::proto::{
     QueryPacketCommitmentResponse, QueryPacketReceiptRequest, QueryPacketReceiptResponse,
     QueryStellarClientParamsRequest, QueryStellarClientParamsResponse,
 };
-use ipsa_core::{
+use ipsa_chains::types::EventCursor;
+use ipsa_ibc_core::commitment::{
+    acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
+};
+
+use crate::{
     api_client::ApiClient,
-    commitment::{ack_commitment_path, packet_commitment_path, packet_receipt_path},
-    ibc::event::event_attributes,
+    event::event_attributes,
     state::{PathLookup, State},
-    types::EventCursor,
 };
 
 #[derive(Clone)]
@@ -143,7 +146,7 @@ impl StellarGatewayQuery for QueryHandler {
             .await
             .map_err(|error| Status::internal(format!("get client state: {error}")))?;
 
-        let cs = ipsa_core::ibc::client_state::AnyClientState::from_soroban_xdr(&xdr)
+        let cs = ipsa_chains::client_state::AnyClientState::from_soroban_xdr(&xdr)
             .map_err(|error| Status::internal(format!("decode soroban client state: {error}")))?;
 
         let client_state =
@@ -182,7 +185,7 @@ impl StellarGatewayQuery for QueryHandler {
                     continue;
                 }
             };
-            let cs = match ipsa_core::ibc::client_state::AnyClientState::from_soroban_xdr(&xdr) {
+            let cs = match ipsa_chains::client_state::AnyClientState::from_soroban_xdr(&xdr) {
                 Ok(cs) => cs,
                 Err(error) => {
                     tracing::warn!(%client_id, %error, "skipping client: decode failed");
@@ -223,7 +226,7 @@ impl StellarGatewayQuery for QueryHandler {
             .await
             .map_err(|error| Status::not_found(format!("consensus state fetch failed: {error}")))?;
 
-        let cs = ipsa_core::ibc::consensus_state::AnyConsensusState::from_soroban_xdr(&xdr)
+        let cs = ipsa_chains::consensus_state::AnyConsensusState::from_soroban_xdr(&xdr)
             .map_err(|error| Status::internal(format!("consensus state decode failed: {error}")))?;
         let consensus_state =
             ibc::primitives::proto::Protobuf::<ibc::primitives::proto::Any>::encode_vec(cs);
@@ -342,7 +345,7 @@ impl StellarGatewayQuery for QueryHandler {
         let seq = u32::try_from(req.height).map_err(|_| {
             Status::invalid_argument(format!("height {} does not fit in u32", req.height))
         })?;
-        let key = ack_commitment_path(req.client_id.as_bytes(), req.sequence);
+        let key = acknowledgement_commitment_path(req.client_id.as_bytes(), req.sequence);
 
         let lookup = self
             .state
