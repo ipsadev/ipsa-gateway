@@ -145,7 +145,7 @@ async fn connect(endpoint: String) -> Channel {
     panic!("could not connect to gateway at {endpoint}");
 }
 
-async fn start_mock_api() -> (String, Arc<Mutex<MockData>>) {
+pub async fn start_mock_api() -> (String, Arc<Mutex<MockData>>) {
     let data = Arc::new(Mutex::new(MockData::default()));
     let app = Router::new()
         .route("/ledger/latest", get(ledger_latest))
