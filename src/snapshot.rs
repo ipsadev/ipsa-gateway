@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::Context;
 use tokio::sync::Mutex;
-use tokio_postgres::{Client, NoTls};
+use tokio_postgres::Client;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS gateway_snapshot (
@@ -67,7 +67,7 @@ impl SnapshotStore {
 }
 
 async fn connect(url: &str) -> anyhow::Result<Client> {
-    let (client, connection) = tokio_postgres::connect(url, NoTls)
+    let (client, connection) = tokio_postgres::connect(url, ipsa_postgres::tls())
         .await
         .context("connecting to the gateway snapshot database")?;
 
