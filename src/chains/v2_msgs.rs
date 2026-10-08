@@ -81,7 +81,7 @@ pub struct MsgTimeout {
     pub proof_unreceived: Vec<u8>,
     #[prost(message, optional, tag = "3")]
     pub proof_height: Option<Height>,
-    #[prost(string, tag = "4")]
+    #[prost(string, tag = "5")]
     pub signer: String,
 }
 
