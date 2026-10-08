@@ -67,7 +67,10 @@ impl SnapshotStore {
 }
 
 async fn connect(url: &str) -> anyhow::Result<Client> {
-    let (client, connection) = tokio_postgres::connect(url, ipsa_postgres::tls())
+    let config = ipsa_postgres::config(url).context("parsing GATEWAY_DB_URL")?;
+
+    let (client, connection) = config
+        .connect(ipsa_postgres::tls())
         .await
         .context("connecting to the gateway snapshot database")?;
 
