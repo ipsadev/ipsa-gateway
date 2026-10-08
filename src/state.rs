@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use ipsa_chains::{
     conversion::{scval_as_bytes, scval_to_v2_path},
@@ -13,7 +13,11 @@ use soroban_client::xdr::{
     LedgerKey, Limits, ReadXdr, ScAddress, ScVal, TransactionMeta,
 };
 
-use crate::api_client::ApiClient;
+use crate::{
+    api_client::ApiClient,
+    snapshot::{Snapshot, SnapshotStore},
+};
+
 pub enum PathLookup {
     Found {
         value_hash: [u8; 32],
@@ -38,6 +42,9 @@ pub struct State {
     last_processed: Option<u32>,
     genesis_ledger: Option<u32>,
     published: HashMap<u32, [u8; 32]>,
+    leaves: BTreeMap<Vec<u8>, Vec<u8>>,
+    store: Option<SnapshotStore>,
+    restore_attempted: bool,
 }
 
 impl State {
@@ -55,7 +62,19 @@ impl State {
             last_processed: None,
             genesis_ledger: None,
             published: HashMap::new(),
+            leaves: BTreeMap::new(),
+            store: None,
+            restore_attempted: false,
         }
+    }
+
+    pub fn with_snapshot_store(mut self, store: Option<SnapshotStore>) -> Self {
+        self.store = store;
+        self
+    }
+
+    pub fn last_processed(&self) -> Option<u32> {
+        self.last_processed
     }
 
     pub fn with_genesis_ledger(mut self, genesis: Option<u32>) -> Self {
@@ -94,6 +113,97 @@ impl State {
     }
 
     async fn process_through(&mut self, seq: u32) -> anyhow::Result<[u8; 32]> {
+        if self.last_processed.is_none() {
+            self.restore().await;
+        }
+
+        let before = self.last_processed;
+        let root = self.replay_through(seq).await?;
+
+        if self.last_processed != before {
+            self.persist().await;
+        }
+
+        Ok(root)
+    }
+
+    async fn restore(&mut self) {
+        if self.restore_attempted {
+            return;
+        }
+
+        self.restore_attempted = true;
+
+        let (Some(store), Some(router)) = (&self.store, &self.router_address) else {
+            return;
+        };
+
+        let snapshot = match store.load(router).await {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => {
+                tracing::info!(
+                    router,
+                    "no gateway snapshot yet — replaying from the router genesis"
+                );
+
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, router, "could not read the gateway snapshot — replaying from the router genesis");
+
+                return;
+            }
+        };
+
+        let mut smt = Smt::new();
+
+        for (path, value) in &snapshot.leaves {
+            smt.insert(path, value);
+        }
+
+        if smt.root() != snapshot.root {
+            tracing::warn!(
+                router,
+                stored = %hex::encode(snapshot.root),
+                rebuilt = %hex::encode(smt.root()),
+                "the gateway snapshot does not rebuild to its own root — ignoring it and replaying from the router genesis"
+            );
+
+            return;
+        }
+
+        tracing::info!(
+            router,
+            ledger = snapshot.last_processed,
+            leaves = snapshot.leaves.len(),
+            root = %hex::encode(snapshot.root),
+            "restored the state tree from the gateway snapshot"
+        );
+
+        self.smt = smt;
+        self.leaves = snapshot.leaves;
+        self.last_processed = Some(snapshot.last_processed);
+    }
+
+    async fn persist(&self) {
+        let (Some(store), Some(router), Some(last_processed)) =
+            (&self.store, &self.router_address, self.last_processed)
+        else {
+            return;
+        };
+
+        let snapshot = Snapshot {
+            last_processed,
+            root: self.smt.root(),
+            leaves: self.leaves.clone(),
+        };
+
+        if let Err(error) = store.save(router, &snapshot).await {
+            tracing::warn!(%error, router, ledger = last_processed, "could not write the gateway snapshot");
+        }
+    }
+
+    async fn replay_through(&mut self, seq: u32) -> anyhow::Result<[u8; 32]> {
         let start = match self.last_processed {
             Some(last) if last >= seq => {
                 let root = self.smt.root();
@@ -294,6 +404,7 @@ impl State {
                     return false;
                 };
                 self.smt.remove(&path);
+                self.leaves.remove(&path);
                 true
             }
             _ => false,
@@ -314,6 +425,7 @@ impl State {
             return false;
         };
         self.smt.insert(&path, &value);
+        self.leaves.insert(path, value);
 
         true
     }

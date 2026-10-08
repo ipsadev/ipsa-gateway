@@ -12,6 +12,7 @@ pub struct GatewayConfig {
     pub event_lookback_ledgers: u32,
     pub cosmos_signer: String,
     pub router_genesis_ledger: Option<u32>,
+    pub snapshot_database_url: Option<String>,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -51,6 +52,7 @@ impl GatewayConfig {
                 .unwrap_or(17280),
             cosmos_signer: env_or("COSMOS_RELAYER_ADDRESS", ""),
             router_genesis_ledger: env_or("ROUTER_GENESIS_LEDGER", "").trim().parse().ok(),
+            snapshot_database_url: Some(env_or("GATEWAY_DB_URL", "")).filter(|url| !url.is_empty()),
         }
     }
 

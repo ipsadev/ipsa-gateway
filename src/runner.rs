@@ -6,7 +6,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::server::Router;
 use tonic::transport::Server;
 
-use crate::{api_client::ApiClient, state::State};
+use crate::{api_client::ApiClient, snapshot::SnapshotStore, state::State};
 use crate::{config::GatewayConfig, msg::MsgHandler, query::QueryHandler, relay::RelayHandler};
 
 async fn build_router(cfg: &GatewayConfig) -> Router {
@@ -35,9 +35,26 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
         );
     }
 
+    let snapshot_store = match &cfg.snapshot_database_url {
+        Some(url) => {
+            tracing::info!("persisting the state tree to GATEWAY_DB_URL");
+
+            Some(SnapshotStore::postgres(url.clone()))
+        }
+        None => {
+            tracing::warn!(
+                "GATEWAY_DB_URL is unset — the state tree lives only in memory, so a restart \
+                 replays the router from ROUTER_GENESIS_LEDGER, which the RPC keeps for about a week"
+            );
+
+            None
+        }
+    };
+
     let state = Arc::new(Mutex::new(
         State::new(api.clone(), ibc_contract_id, router_address)
-            .with_genesis_ledger(cfg.router_genesis_ledger),
+            .with_genesis_ledger(cfg.router_genesis_ledger)
+            .with_snapshot_store(snapshot_store),
     ));
 
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
