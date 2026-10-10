@@ -12,7 +12,8 @@ use crate::proto::{
     QueryConsensusStateResponse, QueryIbcHeaderRequest, QueryIbcHeaderResponse,
     QueryNextSeqRecvRequest, QueryNextSeqRecvResponse, QueryPacketCommitmentRequest,
     QueryPacketCommitmentResponse, QueryPacketReceiptRequest, QueryPacketReceiptResponse,
-    QueryStellarClientParamsRequest, QueryStellarClientParamsResponse,
+    QueryStellarClientParamsRequest, QueryStellarClientParamsResponse, QueryTreeSiblingsRequest,
+    QueryTreeSiblingsResponse,
 };
 use ipsa_chains::types::EventCursor;
 use ipsa_ibc_core::commitment::{
@@ -284,6 +285,46 @@ impl StellarGatewayQuery for QueryHandler {
             commitment,
             proof,
             proof_height: req.height,
+        }))
+    }
+
+    #[tracing::instrument(skip(self, request), name = "grpc.query_tree_siblings")]
+    async fn query_tree_siblings(
+        &self,
+        request: Request<QueryTreeSiblingsRequest>,
+    ) -> Result<Response<QueryTreeSiblingsResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.path.is_empty() {
+            return Err(Status::invalid_argument("path is empty"));
+        }
+
+        let found = self
+            .state
+            .lock()
+            .await
+            .siblings_at(req.ledger, &req.path)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, ledger = req.ledger, "siblings_at failed");
+                Status::failed_precondition(format!("{e:#}"))
+            })?;
+
+        tracing::info!(
+            ledger = found.ledger,
+            root = %hex::encode(found.root),
+            "[gateway] served tree siblings"
+        );
+
+        Ok(Response::new(QueryTreeSiblingsResponse {
+            ledger: found.ledger,
+            root: found.root.to_vec(),
+            value: found.value,
+            siblings: found
+                .siblings
+                .iter()
+                .map(|sibling| sibling.to_vec())
+                .collect(),
         }))
     }
 

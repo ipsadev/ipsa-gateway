@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use ipsa_chains::{
     conversion::{scval_as_bytes, scval_to_v2_path},
@@ -28,6 +28,22 @@ pub enum PathLookup {
     },
 }
 
+pub const JOURNAL_LEDGERS: u32 = 34_560;
+
+#[derive(Clone, Debug)]
+pub struct TreeSiblings {
+    pub ledger: u32,
+    pub root: [u8; 32],
+    pub value: Vec<u8>,
+    pub siblings: Vec<[u8; 32]>,
+}
+
+struct JournalEntry {
+    ledger: u32,
+    path: Vec<u8>,
+    previous: Option<Vec<u8>>,
+}
+
 fn cursor_ledger(cursor: &str) -> Option<u32> {
     let toid: u64 = cursor.split('-').next()?.parse().ok()?;
     u32::try_from(toid >> 32).ok()
@@ -45,6 +61,9 @@ pub struct State {
     leaves: BTreeMap<Vec<u8>, Vec<u8>>,
     store: Option<SnapshotStore>,
     restore_attempted: bool,
+    journal: VecDeque<JournalEntry>,
+    journal_floor: Option<u32>,
+    applying: u32,
 }
 
 impl State {
@@ -65,6 +84,9 @@ impl State {
             leaves: BTreeMap::new(),
             store: None,
             restore_attempted: false,
+            journal: VecDeque::new(),
+            journal_floor: None,
+            applying: 0,
         }
     }
 
@@ -110,6 +132,88 @@ impl State {
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    pub async fn siblings_at(&mut self, seq: u32, key: &[u8]) -> anyhow::Result<TreeSiblings> {
+        self.root_at(seq).await?;
+
+        let floor = self.journal_floor.or(self.last_processed).unwrap_or(seq);
+
+        if seq < floor {
+            anyhow::bail!(
+                "ledger {seq} is older than the gateway's write journal, which starts after \
+                 ledger {floor}; the tree as it was then cannot be rebuilt"
+            );
+        }
+
+        let mut leaves = self.leaves.clone();
+
+        for entry in self.journal.iter().rev().filter(|entry| entry.ledger > seq) {
+            match &entry.previous {
+                Some(value) => leaves.insert(entry.path.clone(), value.clone()),
+                None => leaves.remove(&entry.path),
+            };
+        }
+
+        let mut tree = Smt::new();
+
+        for (path, value) in &leaves {
+            tree.insert(path, value);
+        }
+
+        let root = tree.root();
+
+        if let Some(published) = self.published.get(&seq) {
+            if *published != root {
+                anyhow::bail!(
+                    "the tree rebuilt at ledger {seq} has root {} but the router published {}",
+                    hex::encode(root),
+                    hex::encode(published)
+                );
+            }
+        }
+
+        let value = leaves.get(key).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "path {} is not in the tree at ledger {seq}",
+                hex::encode(key)
+            )
+        })?;
+        let proof = tree.generate_membership_proof(key)?;
+
+        Ok(TreeSiblings {
+            ledger: seq,
+            root,
+            value,
+            siblings: proof.siblings,
+        })
+    }
+
+    fn record(&mut self, path: &[u8]) {
+        self.journal.push_back(JournalEntry {
+            ledger: self.applying,
+            path: path.to_vec(),
+            previous: self.leaves.get(path).cloned(),
+        });
+    }
+
+    fn prune_journal(&mut self, seq: u32) {
+        let Some(horizon) = seq.checked_sub(JOURNAL_LEDGERS) else {
+            return;
+        };
+
+        while self
+            .journal
+            .front()
+            .is_some_and(|entry| entry.ledger <= horizon)
+        {
+            self.journal.pop_front();
+        }
+
+        self.journal_floor = Some(
+            self.journal_floor
+                .map_or(horizon, |floor| floor.max(horizon)),
+        );
     }
 
     async fn process_through(&mut self, seq: u32) -> anyhow::Result<[u8; 32]> {
@@ -342,6 +446,12 @@ impl State {
             None => None,
         };
 
+        if self.journal_floor.is_none() {
+            self.journal_floor = Some(seq.saturating_sub(1));
+        }
+
+        self.applying = seq;
+
         let mut changes_applied = 0usize;
         if let Some(meta) = &meta {
             for change in ledger_changes(meta) {
@@ -365,6 +475,8 @@ impl State {
         if let Some(root) = meta.as_ref().and_then(published_root) {
             self.published.insert(seq, root);
         }
+
+        self.prune_journal(seq);
 
         Ok(())
     }
@@ -403,6 +515,7 @@ impl State {
                 let Some(path) = scval_to_v2_path(&key.key) else {
                     return false;
                 };
+                self.record(&path);
                 self.smt.remove(&path);
                 self.leaves.remove(&path);
                 true
@@ -424,6 +537,7 @@ impl State {
         let Some(value) = scval_as_bytes(&d.val) else {
             return false;
         };
+        self.record(&path);
         self.smt.insert(&path, &value);
         self.leaves.insert(path, value);
 
