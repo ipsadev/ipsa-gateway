@@ -96,6 +96,7 @@ impl GatewayTest {
             cosmos_signer: String::new(),
             router_genesis_ledger: None,
             snapshot_database_url: None,
+            follow_seconds: 0,
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

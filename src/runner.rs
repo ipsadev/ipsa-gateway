@@ -57,6 +57,10 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
             .with_snapshot_store(snapshot_store),
     ));
 
+    if cfg.follow_seconds > 0 {
+        tokio::spawn(follow(api.clone(), state.clone(), cfg.follow_seconds));
+    }
+
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
         .set_service_status("", tonic_health::ServingStatus::Serving)
@@ -142,4 +146,25 @@ pub async fn run(cfg: GatewayConfig) {
         .serve(grpc_addr)
         .await
         .expect("gRPC server failed");
+}
+
+async fn follow(api: ApiClient, state: Arc<Mutex<State>>, seconds: u64) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(seconds));
+
+    loop {
+        interval.tick().await;
+
+        let latest = match api.get_latest_ledger().await {
+            Ok(latest) => latest,
+            Err(error) => {
+                tracing::warn!(%error, "follower: could not read the latest ledger");
+
+                continue;
+            }
+        };
+
+        if let Err(error) = state.lock().await.root_at(latest).await {
+            tracing::warn!(%error, ledger = latest, "follower: could not bring the state tree up to the latest ledger");
+        }
+    }
 }

@@ -7,5 +7,6 @@ pub mod proto;
 pub mod query;
 pub mod relay;
 pub mod runner;
+pub mod seed;
 pub mod snapshot;
 pub mod state;

@@ -103,10 +103,64 @@ impl ApiClient {
             })
     }
 
-    pub async fn list_client_ids(&self, contract_id: &str) -> anyhow::Result<Vec<String>> {
+    pub async fn contract_data(
+        &self,
+        contract_id: &str,
+        keys: &[soroban_client::xdr::ScVal],
+    ) -> anyhow::Result<(u32, Vec<Option<soroban_client::xdr::ScVal>>)> {
+        let keys_xdr = keys
+            .iter()
+            .map(|key| ipsa_chains::conversion::scval_to_xdr(key).map(hex::encode))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
         let body = self
-            .get_json(&format!("/stellar/clients?contract_id={contract_id}"))
+            .post_json(
+                "/stellar/contract-data",
+                serde_json::json!({ "contract_id": contract_id, "keys_xdr": keys_xdr }),
+            )
             .await?;
+
+        let ledger = body
+            .get("latest_ledger")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| anyhow::anyhow!("/stellar/contract-data carries no latest_ledger"))?;
+
+        let values = body
+            .get("values_xdr")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("/stellar/contract-data carries no values_xdr"))?
+            .iter()
+            .map(|value| match value.as_str() {
+                Some(hex_xdr) => {
+                    let bytes = hex::decode(hex_xdr)?;
+
+                    ipsa_chains::conversion::scval_from_xdr(&bytes).map(Some)
+                }
+                None => Ok(None),
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok((ledger as u32, values))
+    }
+
+    pub async fn list_client_ids(&self, contract_id: &str) -> anyhow::Result<Vec<String>> {
+        self.client_ids_at(&format!("/stellar/clients?contract_id={contract_id}"))
+            .await
+    }
+
+    pub async fn list_client_ids_of_type(
+        &self,
+        contract_id: &str,
+        client_type: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        self.client_ids_at(&format!(
+            "/stellar/clients?contract_id={contract_id}&client_type={client_type}"
+        ))
+        .await
+    }
+
+    async fn client_ids_at(&self, path: &str) -> anyhow::Result<Vec<String>> {
+        let body = self.get_json(path).await?;
         let mut ids = Vec::new();
         if let Some(groups) = body.get("clients").and_then(|c| c.as_array()) {
             for group in groups {

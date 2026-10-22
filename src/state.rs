@@ -15,6 +15,7 @@ use soroban_client::xdr::{
 
 use crate::{
     api_client::ApiClient,
+    seed::{self, RouterReader},
     snapshot::{Snapshot, SnapshotStore},
 };
 
@@ -29,6 +30,45 @@ pub enum PathLookup {
 }
 
 pub const JOURNAL_LEDGERS: u32 = 34_560;
+
+pub const SEED_WHEN_BEHIND: u32 = 100_000;
+
+pub const SEED_CLIENT_TYPES: [&str; 6] = [
+    "07-tendermint",
+    "08-wasm",
+    "sepolia",
+    "avalanche",
+    "attestation",
+    "mock",
+];
+
+struct ApiReader<'a> {
+    api: &'a ApiClient,
+    router: &'a str,
+}
+
+impl RouterReader for ApiReader<'_> {
+    async fn client_ids(&self) -> anyhow::Result<Vec<String>> {
+        let mut ids = self.api.list_client_ids(self.router).await?;
+
+        for client_type in SEED_CLIENT_TYPES {
+            ids.extend(
+                self.api
+                    .list_client_ids_of_type(self.router, client_type)
+                    .await?,
+            );
+        }
+
+        ids.sort();
+        ids.dedup();
+
+        Ok(ids)
+    }
+
+    async fn read(&self, keys: &[ScVal]) -> anyhow::Result<(u32, Vec<Option<ScVal>>)> {
+        self.api.contract_data(self.router, keys).await
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct TreeSiblings {
@@ -238,27 +278,81 @@ impl State {
 
         self.restore_attempted = true;
 
-        let (Some(store), Some(router)) = (&self.store, &self.router_address) else {
+        let Some(router) = self.router_address.clone() else {
             return;
         };
 
-        let snapshot = match store.load(router).await {
-            Ok(Some(snapshot)) => snapshot,
-            Ok(None) => {
-                tracing::info!(
-                    router,
-                    "no gateway snapshot yet — replaying from the router genesis"
-                );
-
-                return;
+        if let Some(store) = self.store.clone() {
+            match store.load(&router).await {
+                Ok(Some(snapshot)) => self.restore_snapshot(&router, snapshot),
+                Ok(None) => tracing::info!(router, "no gateway snapshot yet"),
+                Err(error) => tracing::warn!(%error, router, "could not read the gateway snapshot"),
             }
+        }
+
+        let latest = match self.api.get_latest_ledger().await {
+            Ok(latest) => latest,
             Err(error) => {
-                tracing::warn!(%error, router, "could not read the gateway snapshot — replaying from the router genesis");
+                tracing::warn!(%error, "could not read the latest ledger — not seeding");
 
                 return;
             }
         };
 
+        let behind = self
+            .last_processed
+            .map_or(u32::MAX, |last| latest.saturating_sub(last));
+
+        if behind > SEED_WHEN_BEHIND {
+            self.seed_from_router(&router).await;
+        }
+    }
+
+    async fn seed_from_router(&mut self, router: &str) {
+        tracing::info!(
+            router,
+            last_processed = ?self.last_processed,
+            "seeding the state tree from the router's storage, since replaying would need ledgers the RPC no longer keeps"
+        );
+
+        let reader = ApiReader {
+            api: &self.api,
+            router,
+        };
+
+        let seeded = match seed::seed(&reader).await {
+            Ok(seeded) => seeded,
+            Err(error) => {
+                tracing::warn!(%error, router, "could not seed the state tree from the router's storage");
+
+                return;
+            }
+        };
+
+        let mut smt = Smt::new();
+
+        for (path, value) in &seeded.leaves {
+            smt.insert(path, value);
+        }
+
+        tracing::info!(
+            router,
+            ledger = seeded.ledger,
+            leaves = seeded.leaves.len(),
+            root = %hex::encode(seeded.root),
+            "seeded the state tree from the router's storage; it rebuilds the router's stored root"
+        );
+
+        self.smt = smt;
+        self.leaves = seeded.leaves;
+        self.last_processed = Some(seeded.ledger);
+        self.journal.clear();
+        self.journal_floor = Some(seeded.ledger);
+        self.roots.insert(seeded.ledger, seeded.root);
+        self.persist().await;
+    }
+
+    fn restore_snapshot(&mut self, router: &str, snapshot: Snapshot) {
         let mut smt = Smt::new();
 
         for (path, value) in &snapshot.leaves {
@@ -270,7 +364,7 @@ impl State {
                 router,
                 stored = %hex::encode(snapshot.root),
                 rebuilt = %hex::encode(smt.root()),
-                "the gateway snapshot does not rebuild to its own root — ignoring it and replaying from the router genesis"
+                "the gateway snapshot does not rebuild to its own root — ignoring it"
             );
 
             return;
