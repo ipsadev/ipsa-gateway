@@ -4,9 +4,16 @@ use ipsa::core::{
     commitment::packet_commitment_path,
     smt::{verify_membership, Smt},
 };
-use ipsa_gateway::{api_client::ApiClient, snapshot::SnapshotStore, state::State};
+use ipsa_gateway::{
+    api_client::ApiClient,
+    snapshot::SnapshotStore,
+    state::{PathLookup, State},
+};
 
-use super::mock::{ledger_meta_with_write, router_event_json, start_mock_api, MockData};
+use super::mock::{
+    ledger_meta_with_published_write, ledger_meta_with_write, router_event_json, start_mock_api,
+    MockData,
+};
 
 const CONTRACT: [u8; 32] = [7u8; 32];
 const CLIENT: &[u8] = b"sepolia-0";
@@ -165,4 +172,67 @@ async fn a_ledger_before_a_restored_snapshot_is_rebuilt_from_the_router_ledgers(
     assert_eq!(rewound.root, expected.root);
     assert_eq!(rewound.value, a.1);
     assert!(restarted.siblings_at(11, &a.0).await.is_ok());
+}
+
+fn add_published_ledger(
+    data: &Arc<std::sync::Mutex<MockData>>,
+    ledger: u32,
+    (key, value): (Vec<u8>, Vec<u8>),
+    root: [u8; 32],
+) {
+    let mut d = data.lock().unwrap();
+
+    d.ledgers.insert(
+        ledger,
+        (
+            vec![],
+            Some(ledger_meta_with_published_write(CONTRACT, key, value, root)),
+        ),
+    );
+    d.events.push(router_event_json(CONTRACT, ledger));
+    d.latest_ledger = d.latest_ledger.max(ledger);
+}
+
+#[tokio::test]
+async fn a_packet_is_proved_at_its_ledger_after_the_follower_has_moved_past_it() {
+    let (api_url, data) = start_mock_api().await;
+    let (a, b) = (write(1, 0xA1), write(2, 0xB2));
+    let root_then = root_of(std::slice::from_ref(&a));
+    let root_now = root_of(&[a.clone(), b.clone()]);
+
+    add_published_ledger(&data, 10, a.clone(), root_then);
+    add_published_ledger(&data, 12, b.clone(), root_now);
+
+    let mut state = gateway(&api_url, 10);
+
+    state.root_at(12).await.unwrap();
+
+    let PathLookup::Found { proof_bytes, .. } = state.proof_for_path(10, &a.0).await.unwrap()
+    else {
+        panic!("the packet written at ledger 10 is in its tree");
+    };
+    let PathLookup::Absent { .. } = state.proof_for_path(10, &b.0).await.unwrap() else {
+        panic!("a path written at ledger 12 is not in ledger 10's tree");
+    };
+
+    assert!(!proof_bytes.is_empty());
+    assert!(matches!(
+        state.proof_for_path(12, &b.0).await.unwrap(),
+        PathLookup::Found { .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_tree_that_disagrees_with_the_published_root_is_refused() {
+    let (api_url, data) = start_mock_api().await;
+    let a = write(1, 0xA1);
+
+    add_published_ledger(&data, 10, a.clone(), [0xEE; 32]);
+
+    let mut state = gateway(&api_url, 10);
+    let Err(error) = state.proof_for_path(10, &a.0).await else {
+        panic!("a tree the router never published is refused");
+    };
+
+    assert!(error.to_string().contains("but the router published"));
 }

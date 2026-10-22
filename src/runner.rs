@@ -163,8 +163,14 @@ async fn follow(api: ApiClient, state: Arc<Mutex<State>>, seconds: u64) {
             }
         };
 
-        if let Err(error) = state.lock().await.root_at(latest).await {
+        let mut state = state.lock().await;
+
+        if let Err(error) = state.root_at(latest).await {
             tracing::warn!(%error, ledger = latest, "follower: could not bring the state tree up to the latest ledger");
+
+            continue;
         }
+
+        state.heal(latest).await;
     }
 }

@@ -31,8 +31,6 @@ pub enum PathLookup {
 
 pub const JOURNAL_LEDGERS: u32 = 34_560;
 
-pub const SEED_WHEN_BEHIND: u32 = 100_000;
-
 pub const SEED_CLIENT_TYPES: [&str; 3] = ["07-tendermint", "08-wasm", "sepolia"];
 
 struct ApiReader<'a> {
@@ -149,15 +147,15 @@ impl State {
     }
 
     pub async fn proof_for_path(&mut self, seq: u32, key: &[u8]) -> anyhow::Result<PathLookup> {
-        self.root_at(seq).await?;
-        self.check_published_root(seq)?;
-        match self.smt.generate_membership_proof(key) {
+        let (tree, _) = self.tree_at(seq).await?;
+
+        match tree.generate_membership_proof(key) {
             Ok(proof) => Ok(PathLookup::Found {
                 value_hash: proof.value_hash,
                 proof_bytes: serialize_membership_proof(&proof),
             }),
             Err(ProofError::KeyAbsent) => {
-                let proof = self.smt.generate_non_membership_proof(key)?;
+                let proof = tree.generate_non_membership_proof(key)?;
 
                 Ok(PathLookup::Absent {
                     proof_bytes: serialize_non_membership_proof(&proof),
@@ -168,6 +166,25 @@ impl State {
     }
 
     pub async fn siblings_at(&mut self, seq: u32, key: &[u8]) -> anyhow::Result<TreeSiblings> {
+        let (tree, leaves) = self.tree_at(seq).await?;
+
+        let value = leaves.get(key).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "path {} is not in the tree at ledger {seq}",
+                hex::encode(key)
+            )
+        })?;
+        let proof = tree.generate_membership_proof(key)?;
+
+        Ok(TreeSiblings {
+            ledger: seq,
+            root: tree.root(),
+            value,
+            siblings: proof.siblings,
+        })
+    }
+
+    async fn tree_at(&mut self, seq: u32) -> anyhow::Result<(Smt, BTreeMap<Vec<u8>, Vec<u8>>)> {
         self.root_at(seq).await?;
 
         let floor = self.journal_floor.or(self.last_processed).unwrap_or(seq);
@@ -196,30 +213,20 @@ impl State {
 
         let root = tree.root();
 
-        if let Some(published) = self.published.get(&seq) {
-            if *published != root {
+        if let Some(published) = self.published.get(&seq).copied() {
+            if published != root {
+                self.reseed().await;
+
                 anyhow::bail!(
-                    "the tree rebuilt at ledger {seq} has root {} but the router published {}",
+                    "the tree rebuilt at ledger {seq} has root {} but the router published {}; \
+                     the gateway is seeding its tree again from the router's storage",
                     hex::encode(root),
                     hex::encode(published)
                 );
             }
         }
 
-        let value = leaves.get(key).cloned().ok_or_else(|| {
-            anyhow::anyhow!(
-                "path {} is not in the tree at ledger {seq}",
-                hex::encode(key)
-            )
-        })?;
-        let proof = tree.generate_membership_proof(key)?;
-
-        Ok(TreeSiblings {
-            ledger: seq,
-            root,
-            value,
-            siblings: proof.siblings,
-        })
+        Ok((tree, leaves))
     }
 
     fn record(&mut self, path: &[u8]) {
@@ -283,22 +290,7 @@ impl State {
             }
         }
 
-        let latest = match self.api.get_latest_ledger().await {
-            Ok(latest) => latest,
-            Err(error) => {
-                tracing::warn!(%error, "could not read the latest ledger — not seeding");
-
-                return;
-            }
-        };
-
-        let behind = self
-            .last_processed
-            .map_or(u32::MAX, |last| latest.saturating_sub(last));
-
-        if behind > SEED_WHEN_BEHIND {
-            self.seed_from_router(&router).await;
-        }
+        self.seed_from_router(&router).await;
 
         if let Some(last) = self.last_processed {
             self.rebuild_journal(last).await;
@@ -416,11 +408,35 @@ impl State {
         Some((scval_to_v2_path(&d.key)?, scval_as_bytes(&d.val)?))
     }
 
+    pub async fn heal(&mut self, seq: u32) {
+        if self.check_published_root(seq).is_err() {
+            self.reseed().await;
+        }
+    }
+
+    async fn reseed(&mut self) {
+        let Some(router) = self.router_address.clone() else {
+            return;
+        };
+
+        tracing::warn!(
+            router,
+            last_processed = ?self.last_processed,
+            "the state tree disagrees with the root the router published — seeding it again from the router's storage"
+        );
+
+        self.seed_from_router(&router).await;
+
+        if let Some(last) = self.last_processed {
+            self.rebuild_journal(last).await;
+        }
+    }
+
     async fn seed_from_router(&mut self, router: &str) {
         tracing::info!(
             router,
             last_processed = ?self.last_processed,
-            "seeding the state tree from the router's storage, since replaying would need ledgers the RPC no longer keeps"
+            "seeding the state tree from the router's storage, which a saved snapshot or a replay can fall behind"
         );
 
         let reader = ApiReader {
@@ -456,6 +472,7 @@ impl State {
         self.last_processed = Some(seeded.ledger);
         self.journal.clear();
         self.journal_floor = Some(seeded.ledger);
+        self.roots.clear();
         self.roots.insert(seeded.ledger, seeded.root);
         self.persist().await;
     }
