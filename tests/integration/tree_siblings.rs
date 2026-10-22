@@ -136,7 +136,7 @@ async fn a_path_written_after_the_ledger_is_not_in_its_tree() {
 }
 
 #[tokio::test]
-async fn a_ledger_before_a_restored_snapshot_cannot_be_rebuilt() {
+async fn a_ledger_before_a_restored_snapshot_is_rebuilt_from_the_router_ledgers() {
     let (api_url, data) = start_mock_api().await;
     let store = SnapshotStore::memory();
     let (a, b, c) = (write(1, 0xA1), write(2, 0xB2), write(3, 0xC3));
@@ -156,10 +156,13 @@ async fn a_ledger_before_a_restored_snapshot_cannot_be_rebuilt() {
 
     restarted.root_at(12).await.unwrap();
 
-    let error = restarted.siblings_at(10, &a.0).await.unwrap_err();
+    let mut never_restarted = gateway(&api_url, 10);
+    never_restarted.root_at(12).await.unwrap();
 
-    assert!(error
-        .to_string()
-        .contains("older than the gateway's write journal"));
+    let rewound = restarted.siblings_at(10, &a.0).await.unwrap();
+    let expected = never_restarted.siblings_at(10, &a.0).await.unwrap();
+
+    assert_eq!(rewound.root, expected.root);
+    assert_eq!(rewound.value, a.1);
     assert!(restarted.siblings_at(11, &a.0).await.is_ok());
 }

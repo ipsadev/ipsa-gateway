@@ -306,6 +306,121 @@ impl State {
         if behind > SEED_WHEN_BEHIND {
             self.seed_from_router(&router).await;
         }
+
+        if let Some(last) = self.last_processed {
+            self.rebuild_journal(last).await;
+        }
+    }
+
+    async fn rebuild_journal(&mut self, through: u32) {
+        let floor = through.saturating_sub(JOURNAL_LEDGERS);
+
+        let Some(ledgers) = self
+            .ledgers_with_router_activity(floor.saturating_add(1), through)
+            .await
+        else {
+            tracing::warn!(
+                floor,
+                through,
+                "could not list the router's recent activity — proofs for ledgers before {through} will be refused"
+            );
+
+            return;
+        };
+
+        let mut journal = VecDeque::new();
+
+        for seq in &ledgers {
+            let meta = match self.ledger_meta(*seq).await {
+                Ok(Some(meta)) => meta,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(%error, ledger = seq, "could not read a ledger while rebuilding the journal");
+
+                    return;
+                }
+            };
+
+            let mut prior: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
+
+            for change in ledger_changes(&meta) {
+                match change {
+                    LedgerEntryChange::State(entry) | LedgerEntryChange::Restored(entry) => {
+                        if let Some((path, value)) = self.provable(&entry.data) {
+                            prior.insert(path, Some(value));
+                        }
+                    }
+                    LedgerEntryChange::Created(entry) | LedgerEntryChange::Updated(entry) => {
+                        if let Some((path, value)) = self.provable(&entry.data) {
+                            let previous = prior.remove(&path).flatten();
+
+                            journal.push_back(JournalEntry {
+                                ledger: *seq,
+                                path: path.clone(),
+                                previous,
+                            });
+                            prior.insert(path, Some(value));
+                        }
+                    }
+                    LedgerEntryChange::Removed(LedgerKey::ContractData(key)) => {
+                        if !self.matches(&key.contract) {
+                            continue;
+                        }
+
+                        if let Some(path) = scval_to_v2_path(&key.key) {
+                            let previous = prior.remove(&path).flatten();
+
+                            journal.push_back(JournalEntry {
+                                ledger: *seq,
+                                path: path.clone(),
+                                previous,
+                            });
+                            prior.insert(path, None);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(root) = published_root(&meta) {
+                self.published.insert(*seq, root);
+            }
+        }
+
+        tracing::info!(
+            floor,
+            through,
+            ledgers = ledgers.len(),
+            writes = journal.len(),
+            "rebuilt the write journal from the router's recent ledgers"
+        );
+
+        self.journal = journal;
+        self.journal_floor = Some(floor);
+    }
+
+    async fn ledger_meta(&self, seq: u32) -> anyhow::Result<Option<LedgerCloseMeta>> {
+        let ledger = self.api.get_ledger(seq).await?;
+
+        ledger
+            .metadata_xdr
+            .map(|meta_xdr| {
+                LedgerCloseMeta::from_xdr(&meta_xdr, Limits::none())
+                    .map_err(|e| anyhow::anyhow!("LedgerCloseMeta XDR decode: {e}"))
+            })
+            .transpose()
+    }
+
+    fn provable(&self, data: &LedgerEntryData) -> Option<(Vec<u8>, Vec<u8>)> {
+        let LedgerEntryData::ContractData(d) = data else {
+            return None;
+        };
+
+        if !self.matches(&d.contract) {
+            return None;
+        }
+
+        Some((scval_to_v2_path(&d.key)?, scval_as_bytes(&d.val)?))
     }
 
     async fn seed_from_router(&mut self, router: &str) {

@@ -1,4 +1,5 @@
 mod events;
+mod live_seed;
 mod mock;
 mod msg;
 mod query;
