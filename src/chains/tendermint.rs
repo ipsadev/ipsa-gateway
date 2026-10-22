@@ -6,6 +6,7 @@ use ibc_proto::ibc::{
 use prost::Message;
 use serde_json::Value;
 use tendermint::{
+    account::Id,
     block::signed_header::SignedHeader,
     validator::{Info as ValidatorInfo, Set as ValidatorSet},
 };
@@ -15,6 +16,7 @@ use crate::{client_state::AnyClientState, consensus_state::AnyConsensusState};
 pub fn header_proto(
     commit: &Value,
     validators: &Value,
+    trusted_validators: &Value,
     trusted_height: u64,
     revision_number: u64,
 ) -> Result<Vec<u8>> {
@@ -26,6 +28,22 @@ pub fn header_proto(
     )
     .context("signed_header is not a tendermint SignedHeader")?;
 
+    let proposer = signed_header.header.proposer_address;
+
+    let header = RawTmHeader {
+        signed_header: Some(signed_header.into()),
+        validator_set: Some(validator_set(validators, Some(proposer))?.into()),
+        trusted_height: Some(RawHeight {
+            revision_number,
+            revision_height: trusted_height,
+        }),
+        trusted_validators: Some(validator_set(trusted_validators, None)?.into()),
+    };
+
+    Ok(header.encode_to_vec())
+}
+
+fn validator_set(validators: &Value, proposer: Option<Id>) -> Result<ValidatorSet> {
     let infos: Vec<ValidatorInfo> = serde_json::from_value(
         validators
             .get("validators")
@@ -38,23 +56,10 @@ pub fn header_proto(
         return Err(anyhow!("/validators returned an empty set"));
     }
 
-    let proposer = signed_header.header.proposer_address;
-    let set = ValidatorSet::new(
-        infos.clone(),
-        infos.iter().find(|v| v.address == proposer).cloned(),
-    );
+    let proposer =
+        proposer.and_then(|address| infos.iter().find(|v| v.address == address).cloned());
 
-    let header = RawTmHeader {
-        signed_header: Some(signed_header.into()),
-        validator_set: Some(set.clone().into()),
-        trusted_height: Some(RawHeight {
-            revision_number,
-            revision_height: trusted_height,
-        }),
-        trusted_validators: Some(set.into()),
-    };
-
-    Ok(header.encode_to_vec())
+    Ok(ValidatorSet::new(infos, proposer))
 }
 
 pub struct TendermintBootstrap {

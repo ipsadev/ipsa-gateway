@@ -166,6 +166,11 @@ pub fn tendermint_header_to_soroban_xdr(header_bytes: &[u8]) -> Result<Vec<u8>> 
         .as_ref()
         .map(|v| v.encode_to_vec())
         .unwrap_or_default();
+    let trusted_validator_set_bytes = header
+        .trusted_validators
+        .as_ref()
+        .map(|v| v.encode_to_vec())
+        .unwrap_or_default();
     let signed_header_bytes = signed_header.encode_to_vec();
 
     let state = scval_struct(vec![
@@ -185,6 +190,10 @@ pub fn tendermint_header_to_soroban_xdr(header_bytes: &[u8]) -> Result<Vec<u8>> 
         ("app_hash", scval_bytes(&app_hash)?),
         ("signed_header_bytes", scval_bytes(&signed_header_bytes)?),
         ("validator_set_bytes", scval_bytes(&validator_set_bytes)?),
+        (
+            "trusted_validator_set_bytes",
+            scval_bytes(&trusted_validator_set_bytes)?,
+        ),
     ])?;
 
     scval_to_xdr(&state)
