@@ -33,14 +33,7 @@ pub const JOURNAL_LEDGERS: u32 = 34_560;
 
 pub const SEED_WHEN_BEHIND: u32 = 100_000;
 
-pub const SEED_CLIENT_TYPES: [&str; 6] = [
-    "07-tendermint",
-    "08-wasm",
-    "sepolia",
-    "avalanche",
-    "attestation",
-    "mock",
-];
+pub const SEED_CLIENT_TYPES: [&str; 3] = ["07-tendermint", "08-wasm", "sepolia"];
 
 struct ApiReader<'a> {
     api: &'a ApiClient,

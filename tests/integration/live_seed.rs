@@ -5,12 +5,7 @@ use soroban_client::xdr::ScVal;
 
 const ROUTER: &str = "CBA7QRXNLV2VGXNB7JALC4ZRPD4Q3SFAJRXFS3NTUJBFLLIDT6AEECSS";
 
-const CLIENTS: [&str; 4] = [
-    "07-tendermint-0",
-    "07-tendermint-1",
-    "sepolia-0",
-    "avalanche-0",
-];
+const CLIENTS: [&str; 3] = ["07-tendermint-0", "07-tendermint-1", "sepolia-0"];
 
 struct LiveRouter {
     rpc: RpcClient,
