@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
+use ipsa::core::{
+    proof::{serialize_membership_proof, serialize_non_membership_proof},
+    smt::{ProofError, Smt},
+};
 use ipsa_chains::{
     conversion::{scval_as_bytes, scval_to_v2_path},
     types::EventCursor,
-};
-use ipsa_ibc_core::{
-    proof::{serialize_membership_proof, serialize_non_membership_proof},
-    smt::{ProofError, Smt},
 };
 use soroban_client::xdr::{
     ContractEvent, ContractEventBody, LedgerCloseMeta, LedgerEntryChange, LedgerEntryData,

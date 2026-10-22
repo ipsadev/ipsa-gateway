@@ -451,11 +451,11 @@ async fn start_cosmos(events: serde_json::Value) -> GatewayTest {
     t.with_data(|d| {
         d.cosmos_packets.insert(COSMOS_TX.to_string(), events);
         d.cosmos_proofs.insert(
-            ipsa_ibc_core::commitment::packet_commitment_path(b"07-tendermint-0", 1),
+            ipsa::core::commitment::packet_commitment_path(b"07-tendermint-0", 1),
             (vec![1u8], vec![9u8; 40]),
         );
         d.cosmos_proofs.insert(
-            ipsa_ibc_core::commitment::acknowledgement_commitment_path(b"08-wasm-0", 2),
+            ipsa::core::commitment::acknowledgement_commitment_path(b"08-wasm-0", 2),
             (vec![1u8], vec![8u8; 40]),
         );
         d.cosmos_headers.insert(120, tendermint_header_proto(120));
@@ -776,7 +776,7 @@ async fn start_timeout(receipt: Option<Vec<u8>>) -> GatewayTest {
         d.cosmos_latest_height = 120;
         d.cosmos_headers.insert(120, tendermint_header_proto(120));
         d.cosmos_proofs.insert(
-            ipsa_ibc_core::commitment::packet_receipt_path(b"08-wasm-0", TIMEOUT_SEQUENCE),
+            ipsa::core::commitment::packet_receipt_path(b"08-wasm-0", TIMEOUT_SEQUENCE),
             (receipt.unwrap_or_default(), vec![7u8; 40]),
         );
         d.client_states.insert(

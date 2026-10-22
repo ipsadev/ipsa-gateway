@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use ipsa_gateway::{api_client::ApiClient, snapshot::SnapshotStore, state::State};
-use ipsa_ibc_core::{
+use ipsa::core::{
     commitment::packet_commitment_path,
     smt::{verify_membership, Smt},
 };
+use ipsa_gateway::{api_client::ApiClient, snapshot::SnapshotStore, state::State};
 
 use super::mock::{ledger_meta_with_write, router_event_json, start_mock_api, MockData};
 

@@ -6,6 +6,9 @@ use soroban_client::xdr::{
 };
 use tonic::Code;
 
+use ipsa::core::commitment::{
+    acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
+};
 use ipsa_chains::client_state::AnyClientState;
 use ipsa_chains::conversion::{
     scval_bytes, scval_height, scval_string, scval_struct, scval_symbol, scval_to_xdr, scval_vec,
@@ -14,9 +17,6 @@ use ipsa_gateway::proto::{
     EventsRequest, LatestHeightRequest, QueryAcknowledgementRequest, QueryClientStateRequest,
     QueryClientStatesRequest, QueryConsensusStateRequest, QueryIbcHeaderRequest,
     QueryNextSeqRecvRequest, QueryPacketCommitmentRequest, QueryPacketReceiptRequest,
-};
-use ipsa_ibc_core::commitment::{
-    acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
 };
 
 use super::mock::{

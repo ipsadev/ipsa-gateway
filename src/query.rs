@@ -15,10 +15,10 @@ use crate::proto::{
     QueryStellarClientParamsRequest, QueryStellarClientParamsResponse, QueryTreeSiblingsRequest,
     QueryTreeSiblingsResponse,
 };
-use ipsa_chains::types::EventCursor;
-use ipsa_ibc_core::commitment::{
+use ipsa::core::commitment::{
     acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
 };
+use ipsa_chains::types::EventCursor;
 
 use crate::{
     api_client::ApiClient,

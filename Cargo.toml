@@ -12,7 +12,7 @@ name = "ipsa-gateway"
 path = "src/main.rs"
 
 [dependencies]
-ipsa-ibc-core = { workspace = true }
+ipsa = { workspace = true }
 ipsa-chains = { workspace = true }
 ipsa-postgres = { workspace = true }
 

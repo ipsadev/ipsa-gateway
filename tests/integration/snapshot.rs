@@ -1,11 +1,11 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use ipsa::core::{commitment::packet_commitment_path, smt::Smt};
 use ipsa_gateway::{
     api_client::ApiClient,
     snapshot::{Snapshot, SnapshotStore},
     state::State,
 };
-use ipsa_ibc_core::{commitment::packet_commitment_path, smt::Smt};
 
 use super::mock::{ledger_meta_with_write, router_event_json, start_mock_api, MockData};
 
