@@ -5,6 +5,8 @@ use soroban_client::xdr::{
     ScString, ScSymbol, ScVal, ScVec, StringM, Uint256, VecM, WriteXdr,
 };
 
+pub const XDR_DEPTH: u32 = 500;
+
 pub fn scval_string(s: &str) -> Result<ScVal> {
     let m: StringM = s
         .try_into()
@@ -103,7 +105,7 @@ pub fn scval_height(revision_number: u64, revision_height: u64) -> Result<ScVal>
 }
 
 pub fn scval_from_xdr(bytes: &[u8]) -> Result<ScVal> {
-    ScVal::from_xdr(bytes, Limits::none()).map_err(|e| anyhow!("ScVal from_xdr: {e}"))
+    ScVal::from_xdr(bytes, Limits::depth(XDR_DEPTH)).map_err(|e| anyhow!("ScVal from_xdr: {e}"))
 }
 
 pub fn scval_to_xdr(val: &ScVal) -> Result<Vec<u8>> {
@@ -123,7 +125,7 @@ pub fn persistent_contract_data_key(contract: [u8; 32], key_val: ScVal) -> Resul
 }
 
 pub fn ledger_entry_contract_val(entry_xdr: &[u8]) -> Option<ScVal> {
-    match LedgerEntryData::from_xdr(entry_xdr, Limits::none()).ok()? {
+    match LedgerEntryData::from_xdr(entry_xdr, Limits::depth(XDR_DEPTH)).ok()? {
         LedgerEntryData::ContractData(d) => Some(d.val),
         _ => None,
     }
