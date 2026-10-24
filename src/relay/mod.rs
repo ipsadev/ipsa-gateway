@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use crate::api_client::{ApiClient, CosmosPacketEvent};
+use crate::availability::{cosmos_header_status, header_assembly_status};
 use crate::state::{PathLookup, State};
 use ipsa::core::commitment::{
     acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
@@ -123,7 +124,7 @@ impl RelayHandler {
             .await
             .map_err(|error| {
                 tracing::error!(%error, height, "cosmos header failed");
-                Status::internal(format!("cosmos header at {height}: {error}"))
+                cosmos_header_status(&error)
             })?;
 
         let params = TendermintBootstrap {
@@ -442,7 +443,7 @@ impl RelayHandler {
 
         let header = self.header.assemble_at(ledger).await.map_err(|error| {
             tracing::error!(%error, ledger, "header assembly failed");
-            Status::internal(format!("header assembly failed: {error:#}"))
+            header_assembly_status(&error)
         })?;
 
         let carries_root = header.state_root_proof.is_some();
@@ -675,7 +676,7 @@ impl RelayHandler {
             .await
             .map_err(|error| {
                 tracing::error!(%error, height, trusted, "cosmos header failed");
-                Status::internal(format!("cosmos header failed: {error}"))
+                cosmos_header_status(&error)
             })?;
 
         let header_xdr = tendermint_header_to_soroban_xdr(&header)
@@ -1019,7 +1020,7 @@ impl ProofApiService for RelayHandler {
 
         let header = self.header.assemble_at(slot).await.map_err(|error| {
             tracing::error!(%error, slot, "header assembly failed");
-            Status::internal(format!("header assembly failed: {error:#}"))
+            header_assembly_status(&error)
         })?;
 
         let consensus_state = self.consensus_state_at(slot, &header).await?;

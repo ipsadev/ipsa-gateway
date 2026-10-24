@@ -22,6 +22,7 @@ use ipsa_chains::types::EventCursor;
 
 use crate::{
     api_client::ApiClient,
+    availability::header_assembly_status,
     event::event_attributes,
     state::{PathLookup, State},
 };
@@ -440,7 +441,7 @@ impl StellarGatewayQuery for QueryHandler {
 
         let stellar_header = self.header.assemble_at(seq).await.map_err(|error| {
             tracing::error!(%error, sequence = seq, "header assembly failed");
-            Status::internal(format!("header assembly failed: {error:#}"))
+            header_assembly_status(&error)
         })?;
 
         Ok(Response::new(QueryIbcHeaderResponse {

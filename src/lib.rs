@@ -1,4 +1,5 @@
 pub mod api_client;
+pub mod availability;
 pub mod config;
 pub mod event;
 pub mod header;

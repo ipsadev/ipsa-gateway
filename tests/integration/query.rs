@@ -515,7 +515,7 @@ async fn state_root_proof_is_absent_when_no_transaction_ran() {
 }
 
 #[tokio::test]
-async fn query_ibc_header_fails_diagnosably_without_archive_evidence() {
+async fn query_ibc_header_reports_evidence_that_is_not_published_yet() {
     let t = GatewayTest::start(None).await;
     let header_xdr = LedgerHeader::default().to_xdr(Limits::none()).unwrap();
     t.with_data(|d| {
@@ -529,10 +529,10 @@ async fn query_ibc_header_fails_diagnosably_without_archive_evidence() {
         .await
         .expect_err("no archived SCP evidence for this ledger");
 
-    assert_eq!(err.code(), tonic::Code::Internal);
+    assert_eq!(err.code(), tonic::Code::Unavailable);
     assert!(
-        err.message().contains("header assembly failed"),
-        "the error must name the stage that failed, got: {}",
+        err.message().contains("not available yet"),
+        "the relayer must be told to retry, got: {}",
         err.message()
     );
 }

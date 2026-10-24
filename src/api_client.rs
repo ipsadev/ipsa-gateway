@@ -1,3 +1,4 @@
+use crate::availability::{cosmos_height_pending, HEIGHT_ATTEMPTS, HEIGHT_WAIT};
 use ipsa_chains::{
     conversion::string_field,
     types::{EventCursor, EventRecord, EventsPage, LedgerData, SubmittedTx},
@@ -503,13 +504,26 @@ impl ApiClient {
         height: u64,
         trusted_height: u64,
     ) -> anyhow::Result<Vec<u8>> {
-        let body = self
-            .get_json(&format!(
-                "/cosmos/header/{height}?trusted_height={trusted_height}"
-            ))
-            .await?;
+        let path = format!("/cosmos/header/{height}?trusted_height={trusted_height}");
+        let mut attempt = 1;
 
-        hex_field(&body, "header")
+        loop {
+            match self.get_json(&path).await {
+                Err(error)
+                    if attempt < HEIGHT_ATTEMPTS && cosmos_height_pending(&error.to_string()) =>
+                {
+                    tracing::debug!(
+                        height,
+                        attempt,
+                        "the Cosmos Hub has not produced the block yet"
+                    );
+
+                    attempt += 1;
+                    tokio::time::sleep(HEIGHT_WAIT).await;
+                }
+                answer => return hex_field(&answer?, "header"),
+            }
+        }
     }
 
     pub async fn get_cosmos_proof(
