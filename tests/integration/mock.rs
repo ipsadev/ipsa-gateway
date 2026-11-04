@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State as AxState};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
@@ -67,6 +68,10 @@ pub struct MockData {
     pub cosmos_headers: HashMap<u64, Vec<u8>>,
     pub cosmos_latest_height: u64,
     pub cosmos_proof_heights: Vec<u64>,
+    pub without_sequence_route: bool,
+    pub full_latest_reads: u32,
+    pub event_start_ledgers: Vec<u32>,
+    pub ledger_delays: HashMap<u32, std::time::Duration>,
 }
 
 pub struct GatewayTest {
@@ -151,6 +156,7 @@ pub async fn start_mock_api() -> (String, Arc<Mutex<MockData>>) {
     let data = Arc::new(Mutex::new(MockData::default()));
     let app = Router::new()
         .route("/ledger/latest", get(ledger_latest))
+        .route("/ledger/latest/sequence", get(ledger_latest_sequence))
         .route("/ledger/{seq}", get(ledger_by_seq))
         .route("/tx/prepare", post(tx_prepare))
         .route("/tx/submit", post(tx_submit))
@@ -188,20 +194,43 @@ pub async fn start_mock_api() -> (String, Arc<Mutex<MockData>>) {
 }
 
 async fn ledger_latest(AxState(data): AxState<Arc<Mutex<MockData>>>) -> Json<Value> {
-    let d = data.lock().unwrap();
+    let mut d = data.lock().unwrap();
+    d.full_latest_reads += 1;
     Json(json!({ "sequence": d.latest_ledger }))
+}
+
+async fn ledger_latest_sequence(
+    AxState(data): AxState<Arc<Mutex<MockData>>>,
+) -> axum::response::Response {
+    let d = data.lock().unwrap();
+
+    if d.without_sequence_route {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    }
+
+    Json(json!({ "sequence": d.latest_ledger })).into_response()
 }
 
 async fn ledger_by_seq(
     AxState(data): AxState<Arc<Mutex<MockData>>>,
     Path(seq): Path<u32>,
 ) -> Json<Value> {
-    let d = data.lock().unwrap();
-    let (header, meta) = d
-        .ledgers
-        .get(&seq)
-        .cloned()
-        .unwrap_or_else(|| (vec![], None));
+    let ((header, meta), delay) = {
+        let d = data.lock().unwrap();
+
+        (
+            d.ledgers
+                .get(&seq)
+                .cloned()
+                .unwrap_or_else(|| (vec![], None)),
+            d.ledger_delays.get(&seq).copied(),
+        )
+    };
+
+    if let Some(delay) = delay {
+        tokio::time::sleep(delay).await;
+    }
+
     let mut out = json!({ "header_xdr": hex::encode(header) });
     if let Some(meta) = meta {
         out["metadata_xdr"] = json!(hex::encode(meta));
@@ -266,7 +295,15 @@ async fn events(
     AxState(data): AxState<Arc<Mutex<MockData>>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Json<Value> {
-    let d = data.lock().unwrap();
+    let mut d = data.lock().unwrap();
+
+    let start_ledger = params
+        .get("start_ledger")
+        .and_then(|start| start.parse::<u32>().ok());
+
+    if let Some(start) = start_ledger {
+        d.event_start_ledgers.push(start);
+    }
 
     if !d.event_pages.is_empty() {
         let asked = params.get("cursor").cloned().unwrap_or_default();
@@ -291,10 +328,21 @@ async fn events(
         }));
     }
 
+    let events: Vec<Value> = d
+        .events
+        .iter()
+        .filter(|event| {
+            let ledger = event.get("ledger").and_then(Value::as_u64).unwrap_or(0) as u32;
+
+            start_ledger.is_none_or(|start| ledger >= start)
+        })
+        .cloned()
+        .collect();
+
     Json(json!({
         "latest_ledger": d.latest_ledger,
         "cursor": "",
-        "events": d.events.clone(),
+        "events": events,
     }))
 }
 

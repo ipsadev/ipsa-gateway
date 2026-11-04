@@ -6,7 +6,7 @@ use ipsa::core::{
 };
 use ipsa_chains::{
     conversion::{scval_as_bytes, scval_to_v2_path},
-    types::EventCursor,
+    types::{EventCursor, LedgerData},
 };
 use soroban_client::xdr::{
     ContractEvent, ContractEventBody, LedgerCloseMeta, LedgerEntryChange, LedgerEntryData,
@@ -30,6 +30,8 @@ pub enum PathLookup {
 }
 
 pub const JOURNAL_LEDGERS: u32 = 34_560;
+
+const CONCURRENT_LEDGER_FETCHES: usize = 8;
 
 pub const SEED_CLIENT_TYPES: [&str; 3] = ["07-tendermint", "08-wasm", "sepolia"];
 
@@ -562,14 +564,10 @@ impl State {
                     skipped = (seq - start + 1) as usize - ledgers.len(),
                     "replaying only ledgers with router activity"
                 );
-                for ledger_seq in ledgers {
-                    self.apply_ledger(ledger_seq).await?;
-                }
+                self.apply_ledgers(ledgers).await?;
             }
             None => {
-                for ledger_seq in start..=seq {
-                    self.apply_ledger(ledger_seq).await?;
-                }
+                self.apply_ledgers((start..=seq).collect()).await?;
             }
         }
 
@@ -654,9 +652,40 @@ impl State {
         None
     }
 
+    async fn apply_ledgers(&mut self, ledgers: Vec<u32>) -> anyhow::Result<()> {
+        for batch in ledgers.chunks(CONCURRENT_LEDGER_FETCHES) {
+            let mut fetches = tokio::task::JoinSet::new();
+
+            for &seq in batch {
+                let api = self.api.clone();
+
+                fetches.spawn(async move { (seq, api.get_ledger(seq).await) });
+            }
+
+            let mut fetched = BTreeMap::new();
+
+            while let Some(joined) = fetches.join_next().await {
+                let (seq, ledger) =
+                    joined.map_err(|error| anyhow::anyhow!("ledger fetch task failed: {error}"))?;
+
+                fetched.insert(seq, ledger?);
+            }
+
+            for (seq, ledger) in fetched {
+                self.apply_fetched(seq, ledger)?;
+            }
+        }
+
+        Ok(())
+    }
+
     async fn apply_ledger(&mut self, seq: u32) -> anyhow::Result<()> {
         let ledger = self.api.get_ledger(seq).await?;
 
+        self.apply_fetched(seq, ledger)
+    }
+
+    fn apply_fetched(&mut self, seq: u32, ledger: LedgerData) -> anyhow::Result<()> {
         let meta = match ledger.metadata_xdr {
             Some(meta_xdr) => Some(
                 LedgerCloseMeta::from_xdr(&meta_xdr, Limits::none())

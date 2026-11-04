@@ -1,6 +1,7 @@
 use ibc::primitives::proto::{Any, Protobuf};
 use prost::Message as _;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
     InvokeHostFunctionSuccessPreImage, LedgerHeader, Limits, ReadXdr, ScVal, WriteXdr,
 };
@@ -678,6 +679,60 @@ async fn replay_across_a_gap_applies_every_event_bearing_ledger() {
         32,
         "the filtered replay must not drop state written before the gap"
     );
+}
+
+#[tokio::test]
+async fn replay_applies_ledgers_in_order_when_their_fetches_finish_out_of_order() {
+    let contract = [7u8; 32];
+    let client_id = "07-tendermint-0";
+    let path = packet_commitment_path(client_id.as_bytes(), 1);
+
+    let earlier = ledger_meta_with_write(contract, path.clone(), vec![0xA1u8; 32]);
+    let later = ledger_meta_with_write(contract, path, vec![0xB2u8; 32]);
+    let unrelated = ledger_meta_with_write(
+        contract,
+        packet_commitment_path(client_id.as_bytes(), 9),
+        vec![0x99u8; 32],
+    );
+
+    let t = GatewayTest::start(Some(contract)).await;
+    t.with_data(|d| {
+        d.ledgers.insert(9, (vec![], Some(unrelated)));
+        d.ledgers.insert(10, (vec![], Some(earlier)));
+        d.ledgers.insert(12, (vec![], Some(later)));
+        d.events.push(router_event_json(contract, 9));
+        d.events.push(router_event_json(contract, 10));
+        d.events.push(router_event_json(contract, 12));
+        d.ledger_delays
+            .insert(10, std::time::Duration::from_millis(300));
+    });
+
+    t.query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 9,
+            height: 9,
+        })
+        .await
+        .unwrap();
+
+    let at_twelve = t
+        .query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: client_id.into(),
+            sequence: 1,
+            height: 12,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        at_twelve.commitment,
+        Sha256::digest([0xB2u8; 32]).to_vec(),
+        "ledger 12's write must win even though ledger 10's fetch finished last"
+    );
+    assert_ne!(at_twelve.commitment, Sha256::digest([0xA1u8; 32]).to_vec());
 }
 
 #[tokio::test]
