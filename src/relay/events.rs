@@ -8,6 +8,7 @@ use ipsa_chains::types::{EventCursor, EventRecord};
 
 const PAGE_LIMIT: u32 = 200;
 const MAX_PAGES: usize = 50;
+const RECENT_LEDGERS: u32 = 720;
 
 const RECV_PACKET: &str = "recv_packet";
 
@@ -77,6 +78,35 @@ pub async fn packet_events_in_txs(
         .collect();
 
     let latest = api.get_latest_ledger().await?;
+    let recent = lookback_ledgers.min(RECENT_LEDGERS);
+
+    let mut records = transaction_events(api, contract_id, &wanted, latest, recent).await?;
+
+    let all_found = wanted.iter().all(|hash| {
+        records
+            .iter()
+            .any(|record| record.tx_hash.to_lowercase() == *hash)
+    });
+
+    if !all_found && recent < lookback_ledgers {
+        records = transaction_events(api, contract_id, &wanted, latest, lookback_ledgers).await?;
+    }
+
+    let found = records
+        .iter()
+        .filter_map(|record| to_packet_event(record, &records))
+        .collect();
+
+    Ok(found)
+}
+
+async fn transaction_events(
+    api: &ApiClient,
+    contract_id: &str,
+    wanted: &[String],
+    latest: u32,
+    lookback_ledgers: u32,
+) -> Result<Vec<EventRecord>> {
     let start_ledger = latest.saturating_sub(lookback_ledgers).max(1);
 
     let mut cursor = EventCursor::StartLedger(start_ledger);
@@ -102,10 +132,5 @@ pub async fn packet_events_in_txs(
         cursor = EventCursor::Cursor(page.cursor);
     }
 
-    let found = records
-        .iter()
-        .filter_map(|record| to_packet_event(record, &records))
-        .collect();
-
-    Ok(found)
+    Ok(records)
 }

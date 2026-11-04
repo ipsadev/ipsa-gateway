@@ -122,3 +122,100 @@ async fn a_write_ack_with_no_recv_packet_beside_it_is_dropped() {
 
     assert!(found.is_empty());
 }
+
+async fn receive_in_mock(
+    latest_ledger: u32,
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<super::mock::MockData>>,
+) {
+    let (api_url, data) = start_mock_api().await;
+
+    {
+        let mut mock = data.lock().unwrap();
+
+        mock.latest_ledger = latest_ledger;
+        mock.events.push(event(
+            RECEIVE_TX,
+            "recv_packet",
+            1,
+            scval_struct(vec![("packet", packet(1))]).unwrap(),
+        ));
+        mock.events
+            .push(event(RECEIVE_TX, WRITE_ACK, 1, acknowledgement_value()));
+    }
+
+    (api_url, data)
+}
+
+#[tokio::test]
+async fn a_recent_transaction_is_found_by_scanning_only_the_recent_ledgers() {
+    let latest = LEDGER + 10;
+    let (api_url, data) = receive_in_mock(latest).await;
+
+    let found = packet_events_in_txs(
+        &ApiClient::new(&api_url),
+        &stellar_strkey::Contract(ROUTER).to_string(),
+        &[RECEIVE_TX.to_string()],
+        17_280,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(found.len(), 1);
+    assert_eq!(data.lock().unwrap().event_start_ledgers, vec![latest - 720]);
+}
+
+#[tokio::test]
+async fn a_transaction_older_than_the_recent_ledgers_is_found_in_the_full_lookback() {
+    let latest = LEDGER + 5_000;
+    let (api_url, data) = receive_in_mock(latest).await;
+
+    let found = packet_events_in_txs(
+        &ApiClient::new(&api_url),
+        &stellar_strkey::Contract(ROUTER).to_string(),
+        &[RECEIVE_TX.to_string()],
+        17_280,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        data.lock().unwrap().event_start_ledgers,
+        vec![latest - 720, latest - 17_280]
+    );
+}
+
+#[tokio::test]
+async fn finding_a_transaction_reads_the_latest_sequence_without_the_ledger() {
+    let (api_url, data) = receive_in_mock(LEDGER + 10).await;
+
+    packet_events_in_txs(
+        &ApiClient::new(&api_url),
+        &stellar_strkey::Contract(ROUTER).to_string(),
+        &[RECEIVE_TX.to_string()],
+        17_280,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(data.lock().unwrap().full_latest_reads, 0);
+}
+
+#[tokio::test]
+async fn an_api_without_the_sequence_route_falls_back_to_the_latest_ledger() {
+    let (api_url, data) = start_mock_api().await;
+
+    {
+        let mut mock = data.lock().unwrap();
+
+        mock.latest_ledger = LEDGER;
+        mock.without_sequence_route = true;
+    }
+
+    let latest = ApiClient::new(&api_url).get_latest_ledger().await.unwrap();
+
+    assert_eq!(latest, LEDGER);
+    assert_eq!(data.lock().unwrap().full_latest_reads, 1);
+}

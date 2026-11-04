@@ -955,9 +955,11 @@ impl ProofApiService for RelayHandler {
             }
         };
 
-        let (recv, ack) = self.stellar_messages(&packets, ledger).await?;
-        let timeout = self.cosmos_timeout_messages(&expired, ledger).await?;
-        let update = self.update_for(&req.dst_client_id, ledger).await?;
+        let ((recv, ack), timeout, update) = tokio::try_join!(
+            self.stellar_messages(&packets, ledger),
+            self.cosmos_timeout_messages(&expired, ledger),
+            self.update_for(&req.dst_client_id, ledger),
+        )?;
 
         tracing::debug!(
             src_chain = %req.src_chain,

@@ -69,11 +69,34 @@ impl ApiClient {
     }
 
     pub async fn get_latest_ledger(&self) -> anyhow::Result<u32> {
-        let body = self.get_json("/ledger/latest").await?;
+        let sequence_only = self
+            .http
+            .get(self.url("/ledger/latest/sequence"))
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("GET /ledger/latest/sequence failed: {e}"))?;
+
+        let body = if sequence_only.status() == reqwest::StatusCode::NOT_FOUND {
+            self.get_json("/ledger/latest").await?
+        } else {
+            let status = sequence_only.status();
+            let body: serde_json::Value = sequence_only.json().await.map_err(|e| {
+                anyhow::anyhow!("GET /ledger/latest/sequence response parse failed: {e}")
+            })?;
+
+            if !status.is_success() {
+                return Err(anyhow::anyhow!(
+                    "GET /ledger/latest/sequence returned {status}: {body}"
+                ));
+            }
+
+            body
+        };
+
         body.get("sequence")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
-            .ok_or_else(|| anyhow::anyhow!("missing 'sequence' in /ledger/latest response"))
+            .ok_or_else(|| anyhow::anyhow!("missing 'sequence' in the latest ledger response"))
     }
 
     pub async fn get_archive_latest_ledger(&self) -> anyhow::Result<u32> {

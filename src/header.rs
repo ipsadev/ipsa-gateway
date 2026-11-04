@@ -1,4 +1,4 @@
-use crate::api_client::ApiClient;
+use crate::api_client::{ApiClient, ArchivedLedgerHeader, ScpMaterial};
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
@@ -37,6 +37,13 @@ impl Network {
     pub fn network_id(self) -> [u8; 32] {
         Sha256::digest(self.passphrase().as_bytes()).into()
     }
+}
+
+struct Evidence {
+    scp: ScpMaterial,
+    header: ArchivedLedgerHeader,
+    next: ScpMaterial,
+    next_tx_set_xdr: Vec<u8>,
 }
 
 pub struct HeaderAssembler {
@@ -78,12 +85,33 @@ impl HeaderAssembler {
     }
 
     pub async fn assemble(&self, slot: u32, ledger_meta: Option<&[u8]>) -> Result<StellarHeader> {
-        let scp = self.api.get_archive_scp(slot).await?;
-        let header = self.api.get_archive_ledger_header(slot).await?;
+        let evidence = self.evidence(slot).await?;
 
-        let next = self.api.get_archive_scp(slot + 1).await?;
-        let next_tx_set_xdr = self.api.get_archive_tx_set(slot + 1).await?;
+        self.build(slot, evidence, ledger_meta)
+    }
 
+    async fn evidence(&self, slot: u32) -> Result<Evidence> {
+        let (scp, header, next, next_tx_set_xdr) = tokio::try_join!(
+            self.api.get_archive_scp(slot),
+            self.api.get_archive_ledger_header(slot),
+            self.api.get_archive_scp(slot + 1),
+            self.api.get_archive_tx_set(slot + 1),
+        )?;
+
+        Ok(Evidence {
+            scp,
+            header,
+            next,
+            next_tx_set_xdr,
+        })
+    }
+
+    fn build(
+        &self,
+        slot: u32,
+        evidence: Evidence,
+        ledger_meta: Option<&[u8]>,
+    ) -> Result<StellarHeader> {
         let state_root_proof = match (ledger_meta, self.router_contract_id) {
             (Some(meta), Some(_router)) => self.state_root_proof(meta)?,
             _ => None,
@@ -91,11 +119,11 @@ impl HeaderAssembler {
 
         Ok(StellarHeader {
             slot_index: slot as u64,
-            ledger_header_xdr: header.header_xdr,
-            scp_envelopes: scp.envelopes_xdr,
-            quorum_sets_xdr: scp.quorum_sets_xdr,
-            next_scp_envelopes: next.envelopes_xdr,
-            next_tx_set_xdr,
+            ledger_header_xdr: evidence.header.header_xdr,
+            scp_envelopes: evidence.scp.envelopes_xdr,
+            quorum_sets_xdr: evidence.scp.quorum_sets_xdr,
+            next_scp_envelopes: evidence.next.envelopes_xdr,
+            next_tx_set_xdr: evidence.next_tx_set_xdr,
             state_root_proof,
         })
     }
@@ -110,7 +138,9 @@ impl HeaderAssembler {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
 
-        let ledger_meta = match self.api.get_ledger(slot).await {
+        let (ledger, evidence) = tokio::join!(self.api.get_ledger(slot), self.evidence(slot));
+
+        let ledger_meta = match ledger {
             Ok(ledger) => ledger.metadata_xdr,
             Err(error) => {
                 tracing::warn!(%error, slot, "no ledger meta; header will bind no root");
@@ -118,7 +148,7 @@ impl HeaderAssembler {
             }
         };
 
-        let header = self.assemble(slot, ledger_meta.as_deref()).await?;
+        let header = self.build(slot, evidence?, ledger_meta.as_deref())?;
         if header.state_root_proof.is_none() {
             tracing::debug!(slot, "no router root in this ledger");
         }
