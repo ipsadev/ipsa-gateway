@@ -7,7 +7,7 @@ use soroban_client::xdr::{
     TransactionResultPair, TransactionResultResult, WriteXdr,
 };
 
-use crate::proto::{QuorumConfig, StateRootProof, StellarHeader};
+use ipsa::gateway::stellar::{QuorumConfig, StateRootProof, StellarHeader};
 
 pub const ROOT_EVENT_TOPIC: &[u8] = b"ibc_root";
 

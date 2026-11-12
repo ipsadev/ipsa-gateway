@@ -1,5 +1,5 @@
 use crate::api_client::ApiClient;
-use crate::proto::{
+use ipsa::gateway::stellar::{
     stellar_gateway_msg_server::{StellarGatewayMsg, StellarGatewayMsgServer},
     MsgAckPacketRequest, MsgAckPacketResponse, MsgCommitRootRequest, MsgCommitRootResponse,
     MsgCreateClientRequest, MsgCreateClientResponse, MsgRecvPacketRequest, MsgRecvPacketResponse,

@@ -1,15 +1,15 @@
 use soroban_client::xdr::ScVal;
 use tonic::Code;
 
+use ipsa::gateway::stellar::{
+    MsgAckPacketRequest, MsgCreateClientRequest, MsgRecvPacketRequest,
+    MsgRegisterCounterpartyRequest, MsgSubmitMisbehaviourRequest, MsgTimeoutPacketRequest,
+    MsgUpdateClientRequest, SubmitSignedTxRequest,
+};
 use ipsa_chains::client_state::AnyClientState;
 use ipsa_chains::consensus_state::AnyConsensusState;
 use ipsa_chains::conversion::{
     scval_as_bytes, scval_bytes, scval_from_xdr, scval_string, scval_to_xdr, scval_vec_of_bytes,
-};
-use ipsa_gateway::proto::{
-    MsgAckPacketRequest, MsgCreateClientRequest, MsgRecvPacketRequest,
-    MsgRegisterCounterpartyRequest, MsgSubmitMisbehaviourRequest, MsgTimeoutPacketRequest,
-    MsgUpdateClientRequest, SubmitSignedTxRequest,
 };
 
 use super::mock::{

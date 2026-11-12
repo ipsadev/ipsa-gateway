@@ -27,12 +27,12 @@ use ipsa_chains::soroban::tendermint_header_to_soroban_xdr;
 use ipsa_chains::tendermint::{tendermint_genesis, TendermintBootstrap};
 use ipsa_chains::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket, MsgTimeout};
 
-use crate::proto::proofapi::{
+use ipsa::gateway::proofapi::{
     proof_api_service_server::{ProofApiService, ProofApiServiceServer},
     Chain, CreateClientRequest, CreateClientResponse, InfoRequest, InfoResponse, RelayByTxRequest,
     RelayByTxResponse, UpdateClientRequest, UpdateClientResponse,
 };
-use crate::proto::{
+use ipsa::gateway::stellar::{
     Height as WireHeight, QuorumConfig, StellarClientState, StellarConsensusState, StellarHeader,
 };
 

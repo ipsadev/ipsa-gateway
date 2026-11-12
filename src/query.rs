@@ -3,7 +3,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use crate::proto::{
+use ipsa::core::commitment::{
+    acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
+};
+use ipsa::gateway::stellar::{
     stellar_gateway_query_server::{StellarGatewayQuery, StellarGatewayQueryServer},
     EventsRequest, EventsResponse, GatewayContractEvent, IdentifiedClientState,
     LatestHeightRequest, LatestHeightResponse, QueryAcknowledgementRequest,
@@ -14,9 +17,6 @@ use crate::proto::{
     QueryPacketCommitmentResponse, QueryPacketReceiptRequest, QueryPacketReceiptResponse,
     QueryStellarClientParamsRequest, QueryStellarClientParamsResponse, QueryTreeSiblingsRequest,
     QueryTreeSiblingsResponse,
-};
-use ipsa::core::commitment::{
-    acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
 };
 use ipsa_chains::types::EventCursor;
 

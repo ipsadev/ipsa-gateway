@@ -12,7 +12,7 @@ name = "ipsa-gateway"
 path = "src/main.rs"
 
 [dependencies]
-ipsa = { workspace = true }
+ipsa = { workspace = true, features = ["gateway"] }
 ipsa-chains = { workspace = true }
 ipsa-postgres = { workspace = true }
 
@@ -40,6 +40,3 @@ tracing-subscriber = { workspace = true }
 ibc = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
-
-[build-dependencies]
-tonic-prost-build = "0.14"
