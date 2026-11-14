@@ -483,6 +483,30 @@ async fn state_root_proof_points_at_the_router_among_other_invocations() {
 }
 
 #[tokio::test]
+async fn state_root_proof_binds_the_last_of_two_router_invocations() {
+    let first = [7u8; 32];
+    let meta = ledger_meta_with_invocations(&[
+        Some(vec![root_event(ROUTER, "ibc_root", first)]),
+        Some(vec![root_event(ROUTER, "ibc_root", ROOT)]),
+    ]);
+
+    let header = header_with_meta(meta).await;
+
+    let proof = header
+        .state_root_proof
+        .expect("the router emitted roots in this ledger");
+    assert_eq!(
+        proof.result_index, 1,
+        "the header must bind the last router invocation, the one the tree and the light client treat as canonical"
+    );
+    assert_eq!(
+        root_in(&proof),
+        ROOT.to_vec(),
+        "binding the first root would make the header disagree with the end-of-ledger tree"
+    );
+}
+
+#[tokio::test]
 async fn state_root_proof_is_absent_without_a_router_event() {
     let other = [3u8; 32];
     let meta =

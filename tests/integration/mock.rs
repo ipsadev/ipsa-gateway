@@ -607,6 +607,99 @@ pub fn ledger_meta_with_published_write(
     LedgerCloseMeta::V2(v2).to_xdr(Limits::none()).unwrap()
 }
 
+pub fn ledger_meta_with_published_write_and_foreign_root(
+    contract: [u8; 32],
+    key: Vec<u8>,
+    val: Vec<u8>,
+    root: [u8; 32],
+    foreign_contract: [u8; 32],
+    foreign_root: [u8; 32],
+) -> Vec<u8> {
+    let entry = LedgerEntry {
+        last_modified_ledger_seq: 0,
+        data: LedgerEntryData::ContractData(ContractDataEntry {
+            ext: ExtensionPoint::V0,
+            contract: soroban_client::xdr::ScAddress::Contract(ContractId(Hash(contract))),
+            key: scval_bytes(&key).unwrap(),
+            durability: ContractDataDurability::Persistent,
+            val: scval_bytes(&val).unwrap(),
+        }),
+        ext: LedgerEntryExt::V0,
+    };
+
+    let router_events = vec![root_event(contract, "ibc_root", root)];
+    let router_meta = TransactionMeta::V4(TransactionMetaV4 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: LedgerEntryChanges(VecM::default()),
+        operations: vec![OperationMetaV2 {
+            ext: ExtensionPoint::V0,
+            changes: LedgerEntryChanges(
+                vec![LedgerEntryChange::Created(entry)].try_into().unwrap(),
+            ),
+            events: router_events.clone().try_into().unwrap(),
+        }]
+        .try_into()
+        .unwrap(),
+        tx_changes_after: LedgerEntryChanges(VecM::default()),
+        soroban_meta: Some(SorobanTransactionMetaV2 {
+            ext: SorobanTransactionMetaExt::V0,
+            return_value: Some(ScVal::Void),
+        }),
+        events: VecM::default(),
+        diagnostic_events: VecM::default(),
+    });
+
+    let foreign_events = vec![root_event(foreign_contract, "ibc_root", foreign_root)];
+    let foreign_meta = TransactionMeta::V4(TransactionMetaV4 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: LedgerEntryChanges(VecM::default()),
+        operations: vec![OperationMetaV2 {
+            ext: ExtensionPoint::V0,
+            changes: LedgerEntryChanges(VecM::default()),
+            events: foreign_events.clone().try_into().unwrap(),
+        }]
+        .try_into()
+        .unwrap(),
+        tx_changes_after: LedgerEntryChanges(VecM::default()),
+        soroban_meta: Some(SorobanTransactionMetaV2 {
+            ext: SorobanTransactionMetaExt::V0,
+            return_value: Some(ScVal::Void),
+        }),
+        events: VecM::default(),
+        diagnostic_events: VecM::default(),
+    });
+
+    let v2 = LedgerCloseMetaV2 {
+        ext: LedgerCloseMetaExt::V0,
+        ledger_header: Default::default(),
+        tx_set: Default::default(),
+        tx_processing: vec![
+            TransactionResultMetaV1 {
+                ext: ExtensionPoint::V0,
+                result: success_result(&router_events),
+                fee_processing: LedgerEntryChanges(VecM::default()),
+                tx_apply_processing: router_meta,
+                post_tx_apply_fee_processing: LedgerEntryChanges(VecM::default()),
+            },
+            TransactionResultMetaV1 {
+                ext: ExtensionPoint::V0,
+                result: success_result(&foreign_events),
+                fee_processing: LedgerEntryChanges(VecM::default()),
+                tx_apply_processing: foreign_meta,
+                post_tx_apply_fee_processing: LedgerEntryChanges(VecM::default()),
+            },
+        ]
+        .try_into()
+        .unwrap(),
+        upgrades_processing: VecM::default(),
+        scp_info: VecM::default(),
+        total_byte_size_of_live_soroban_state: 0,
+        evicted_keys: VecM::default(),
+    };
+
+    LedgerCloseMeta::V2(v2).to_xdr(Limits::none()).unwrap()
+}
+
 pub const FIXTURE_CHAIN_ID: &str = "testchain-1";
 pub const FIXTURE_LATEST_HEIGHT: u64 = 10;
 

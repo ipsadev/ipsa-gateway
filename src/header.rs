@@ -204,7 +204,7 @@ impl HeaderAssembler {
         &self,
         processing: &[(TransactionResultPair, Option<(ScVal, Vec<ContractEvent>)>)],
     ) -> Result<Option<(usize, InvokeHostFunctionSuccessPreImage)>> {
-        for (index, (_, soroban)) in processing.iter().enumerate() {
+        for (index, (_, soroban)) in processing.iter().enumerate().rev() {
             let Some((return_value, events)) = soroban else {
                 continue;
             };

@@ -369,7 +369,7 @@ impl State {
                 }
             }
 
-            if let Some(root) = published_root(&meta) {
+            if let Some(root) = published_root(&meta, self.ibc_contract_id.as_ref()) {
                 self.published.insert(*seq, root);
             }
         }
@@ -720,7 +720,10 @@ impl State {
             tracing::debug!(sequence = seq, "ledger processed into smt (no ibc changes)");
         }
 
-        if let Some(root) = meta.as_ref().and_then(published_root) {
+        if let Some(root) = meta
+            .as_ref()
+            .and_then(|meta| published_root(meta, self.ibc_contract_id.as_ref()))
+        {
             self.published.insert(seq, root);
         }
 
@@ -805,10 +808,20 @@ impl State {
 
 pub const ROOT_EVENT_TOPIC: &[u8] = b"ibc_root";
 
-fn published_root(meta: &LedgerCloseMeta) -> Option<[u8; 32]> {
+fn published_root(meta: &LedgerCloseMeta, router: Option<&[u8; 32]>) -> Option<[u8; 32]> {
     let mut latest = None;
 
     for event in ledger_events(meta) {
+        if let Some(router) = router {
+            let Some(id) = event.contract_id.as_ref() else {
+                continue;
+            };
+
+            if id.0 .0 != *router {
+                continue;
+            }
+        }
+
         let ContractEventBody::V0(body) = &event.body;
 
         let is_root = body.topics.first().is_some_and(
