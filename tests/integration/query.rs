@@ -310,6 +310,30 @@ async fn packet_commitment_absent_yields_nonmembership_proof() {
 }
 
 #[tokio::test]
+async fn a_proof_request_past_the_latest_ledger_is_refused() {
+    let t = GatewayTest::start(None).await;
+    t.with_data(|d| {
+        d.latest_ledger = 100;
+    });
+
+    let status = t
+        .query()
+        .query_packet_commitment(QueryPacketCommitmentRequest {
+            client_id: "07-tendermint-0".into(),
+            sequence: 1,
+            height: u64::from(u32::MAX),
+        })
+        .await
+        .expect_err("a height past the latest ledger must be refused, not replayed to the tip");
+
+    assert!(
+        status.message().contains("ahead of the latest ledger"),
+        "unexpected error: {}",
+        status.message()
+    );
+}
+
+#[tokio::test]
 async fn state_reflects_contract_write_as_membership_proof() {
     let contract = [7u8; 32];
     let client_id = "07-tendermint-0";
