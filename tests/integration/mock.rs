@@ -46,6 +46,26 @@ pub struct PrepareCall {
     pub args: Vec<Vec<u8>>,
 }
 
+pub const DEFAULT_ROUTER: [u8; 32] = [0xD7; 32];
+
+pub fn test_config(api_url: String, ibc_contract_id: String) -> GatewayConfig {
+    GatewayConfig {
+        host: "127.0.0.1".to_string(),
+        grpc_port: 0,
+        api_url,
+        ibc_contract_id,
+        transfer_contract_id: String::new(),
+        source_account: "GBXDMJBUPSBOG23CYLZDFR5SHS33USHQRSI4XGZUL75SHARCTDPGA22H".to_string(),
+        stellar_chain_id: "stellar-testnet".to_string(),
+        cosmos_chain_id: "simd-1".to_string(),
+        event_lookback_ledgers: 17280,
+        cosmos_signer: String::new(),
+        router_genesis_ledger: None,
+        snapshot_database_url: None,
+        follow_seconds: 0,
+    }
+}
+
 #[derive(Default)]
 pub struct MockData {
     pub latest_ledger: u32,
@@ -85,24 +105,9 @@ impl GatewayTest {
     pub async fn start(ibc_contract_id: Option<[u8; 32]>) -> Self {
         let (api_url, data) = start_mock_api().await;
 
-        let id_string = ibc_contract_id
-            .map(|c| format!("{}", stellar_strkey::Contract(c)))
-            .unwrap_or_default();
-        let cfg = GatewayConfig {
-            host: "127.0.0.1".to_string(),
-            grpc_port: 0,
-            api_url,
-            ibc_contract_id: id_string,
-            transfer_contract_id: String::new(),
-            source_account: "GBXDMJBUPSBOG23CYLZDFR5SHS33USHQRSI4XGZUL75SHARCTDPGA22H".to_string(),
-            stellar_chain_id: "stellar-testnet".to_string(),
-            cosmos_chain_id: "simd-1".to_string(),
-            event_lookback_ledgers: 17280,
-            cosmos_signer: String::new(),
-            router_genesis_ledger: None,
-            snapshot_database_url: None,
-            follow_seconds: 0,
-        };
+        let ibc_contract_id = ibc_contract_id.unwrap_or(DEFAULT_ROUTER);
+        let id_string = format!("{}", stellar_strkey::Contract(ibc_contract_id));
+        let cfg = test_config(api_url, id_string);
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -596,6 +601,99 @@ pub fn ledger_meta_with_published_write(
             tx_apply_processing: meta,
             post_tx_apply_fee_processing: LedgerEntryChanges(VecM::default()),
         }]
+        .try_into()
+        .unwrap(),
+        upgrades_processing: VecM::default(),
+        scp_info: VecM::default(),
+        total_byte_size_of_live_soroban_state: 0,
+        evicted_keys: VecM::default(),
+    };
+
+    LedgerCloseMeta::V2(v2).to_xdr(Limits::none()).unwrap()
+}
+
+pub fn ledger_meta_with_published_write_and_foreign_root(
+    contract: [u8; 32],
+    key: Vec<u8>,
+    val: Vec<u8>,
+    root: [u8; 32],
+    foreign_contract: [u8; 32],
+    foreign_root: [u8; 32],
+) -> Vec<u8> {
+    let entry = LedgerEntry {
+        last_modified_ledger_seq: 0,
+        data: LedgerEntryData::ContractData(ContractDataEntry {
+            ext: ExtensionPoint::V0,
+            contract: soroban_client::xdr::ScAddress::Contract(ContractId(Hash(contract))),
+            key: scval_bytes(&key).unwrap(),
+            durability: ContractDataDurability::Persistent,
+            val: scval_bytes(&val).unwrap(),
+        }),
+        ext: LedgerEntryExt::V0,
+    };
+
+    let router_events = vec![root_event(contract, "ibc_root", root)];
+    let router_meta = TransactionMeta::V4(TransactionMetaV4 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: LedgerEntryChanges(VecM::default()),
+        operations: vec![OperationMetaV2 {
+            ext: ExtensionPoint::V0,
+            changes: LedgerEntryChanges(
+                vec![LedgerEntryChange::Created(entry)].try_into().unwrap(),
+            ),
+            events: router_events.clone().try_into().unwrap(),
+        }]
+        .try_into()
+        .unwrap(),
+        tx_changes_after: LedgerEntryChanges(VecM::default()),
+        soroban_meta: Some(SorobanTransactionMetaV2 {
+            ext: SorobanTransactionMetaExt::V0,
+            return_value: Some(ScVal::Void),
+        }),
+        events: VecM::default(),
+        diagnostic_events: VecM::default(),
+    });
+
+    let foreign_events = vec![root_event(foreign_contract, "ibc_root", foreign_root)];
+    let foreign_meta = TransactionMeta::V4(TransactionMetaV4 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: LedgerEntryChanges(VecM::default()),
+        operations: vec![OperationMetaV2 {
+            ext: ExtensionPoint::V0,
+            changes: LedgerEntryChanges(VecM::default()),
+            events: foreign_events.clone().try_into().unwrap(),
+        }]
+        .try_into()
+        .unwrap(),
+        tx_changes_after: LedgerEntryChanges(VecM::default()),
+        soroban_meta: Some(SorobanTransactionMetaV2 {
+            ext: SorobanTransactionMetaExt::V0,
+            return_value: Some(ScVal::Void),
+        }),
+        events: VecM::default(),
+        diagnostic_events: VecM::default(),
+    });
+
+    let v2 = LedgerCloseMetaV2 {
+        ext: LedgerCloseMetaExt::V0,
+        ledger_header: Default::default(),
+        tx_set: Default::default(),
+        tx_processing: vec![
+            TransactionResultMetaV1 {
+                ext: ExtensionPoint::V0,
+                result: success_result(&router_events),
+                fee_processing: LedgerEntryChanges(VecM::default()),
+                tx_apply_processing: router_meta,
+                post_tx_apply_fee_processing: LedgerEntryChanges(VecM::default()),
+            },
+            TransactionResultMetaV1 {
+                ext: ExtensionPoint::V0,
+                result: success_result(&foreign_events),
+                fee_processing: LedgerEntryChanges(VecM::default()),
+                tx_apply_processing: foreign_meta,
+                post_tx_apply_fee_processing: LedgerEntryChanges(VecM::default()),
+            },
+        ]
         .try_into()
         .unwrap(),
         upgrades_processing: VecM::default(),

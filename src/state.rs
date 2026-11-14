@@ -369,7 +369,7 @@ impl State {
                 }
             }
 
-            if let Some(root) = published_root(&meta) {
+            if let Some(root) = published_root(&meta, self.ibc_contract_id.as_ref()) {
                 self.published.insert(*seq, root);
             }
         }
@@ -720,7 +720,10 @@ impl State {
             tracing::debug!(sequence = seq, "ledger processed into smt (no ibc changes)");
         }
 
-        if let Some(root) = meta.as_ref().and_then(published_root) {
+        if let Some(root) = meta
+            .as_ref()
+            .and_then(|meta| published_root(meta, self.ibc_contract_id.as_ref()))
+        {
             self.published.insert(seq, root);
         }
 
@@ -803,21 +806,17 @@ impl State {
     }
 }
 
-pub const ROOT_EVENT_TOPIC: &[u8] = b"ibc_root";
+pub fn published_root(meta: &LedgerCloseMeta, router: Option<&[u8; 32]>) -> Option<[u8; 32]> {
+    let router = router?;
 
-fn published_root(meta: &LedgerCloseMeta) -> Option<[u8; 32]> {
     let mut latest = None;
 
     for event in ledger_events(meta) {
-        let ContractEventBody::V0(body) = &event.body;
-
-        let is_root = body.topics.first().is_some_and(
-            |topic| matches!(topic, ScVal::Symbol(s) if s.0.as_slice() == ROOT_EVENT_TOPIC),
-        );
-
-        if !is_root {
+        if !crate::header::is_router_root_event(&event, router, crate::header::ROOT_EVENT_TOPIC) {
             continue;
         }
+
+        let ContractEventBody::V0(body) = &event.body;
 
         if let Some(bytes) = scval_as_bytes(&body.data) {
             if let Ok(root) = <[u8; 32]>::try_from(bytes.as_slice()) {

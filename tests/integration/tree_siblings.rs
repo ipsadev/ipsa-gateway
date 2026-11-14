@@ -11,8 +11,8 @@ use ipsa_gateway::{
 };
 
 use super::mock::{
-    ledger_meta_with_published_write, ledger_meta_with_write, router_event_json, start_mock_api,
-    MockData,
+    ledger_meta_with_published_write, ledger_meta_with_published_write_and_foreign_root,
+    ledger_meta_with_write, router_event_json, start_mock_api, MockData,
 };
 
 const CONTRACT: [u8; 32] = [7u8; 32];
@@ -235,4 +235,40 @@ async fn a_tree_that_disagrees_with_the_published_root_is_refused() {
     };
 
     assert!(error.to_string().contains("but the router published"));
+}
+
+#[tokio::test]
+async fn a_foreign_ibc_root_in_the_same_ledger_is_ignored() {
+    let (api_url, data) = start_mock_api().await;
+    let a = write(1, 0xA1);
+    let router_root = root_of(std::slice::from_ref(&a));
+    let foreign_contract = [9u8; 32];
+
+    {
+        let mut d = data.lock().unwrap();
+
+        d.ledgers.insert(
+            10,
+            (
+                vec![],
+                Some(ledger_meta_with_published_write_and_foreign_root(
+                    CONTRACT,
+                    a.0.clone(),
+                    a.1.clone(),
+                    router_root,
+                    foreign_contract,
+                    [0xEE; 32],
+                )),
+            ),
+        );
+        d.events.push(router_event_json(CONTRACT, 10));
+        d.latest_ledger = d.latest_ledger.max(10);
+    }
+
+    let mut state = gateway(&api_url, 10);
+    let PathLookup::Found { .. } = state.proof_for_path(10, &a.0).await.unwrap() else {
+        panic!(
+            "the router published its own root; a foreign contract's later ibc_root must not win"
+        );
+    };
 }

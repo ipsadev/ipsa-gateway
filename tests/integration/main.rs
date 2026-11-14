@@ -6,4 +6,5 @@ mod msg;
 mod query;
 mod relay;
 mod snapshot;
+mod startup;
 mod tree_siblings;
