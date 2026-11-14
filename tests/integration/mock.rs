@@ -158,7 +158,10 @@ async fn connect(endpoint: String) -> Channel {
 }
 
 pub async fn start_mock_api() -> (String, Arc<Mutex<MockData>>) {
-    let data = Arc::new(Mutex::new(MockData::default()));
+    let data = Arc::new(Mutex::new(MockData {
+        latest_ledger: 1_000_000,
+        ..MockData::default()
+    }));
     let app = Router::new()
         .route("/ledger/latest", get(ledger_latest))
         .route("/ledger/latest/sequence", get(ledger_latest_sequence))

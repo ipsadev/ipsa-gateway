@@ -187,6 +187,18 @@ impl State {
     }
 
     async fn tree_at(&mut self, seq: u32) -> anyhow::Result<(Smt, BTreeMap<Vec<u8>, Vec<u8>>)> {
+        let latest = self
+            .api
+            .get_latest_ledger()
+            .await
+            .map_err(|error| anyhow::anyhow!("could not read the latest ledger: {error}"))?;
+
+        if seq > latest {
+            anyhow::bail!(
+                "ledger {seq} is ahead of the latest ledger {latest}; refusing to replay past the chain tip"
+            );
+        }
+
         self.root_at(seq).await?;
 
         let floor = self.journal_floor.or(self.last_processed).unwrap_or(seq);
