@@ -48,6 +48,24 @@ pub struct PrepareCall {
 
 pub const DEFAULT_ROUTER: [u8; 32] = [0xD7; 32];
 
+pub fn test_config(api_url: String, ibc_contract_id: String) -> GatewayConfig {
+    GatewayConfig {
+        host: "127.0.0.1".to_string(),
+        grpc_port: 0,
+        api_url,
+        ibc_contract_id,
+        transfer_contract_id: String::new(),
+        source_account: "GBXDMJBUPSBOG23CYLZDFR5SHS33USHQRSI4XGZUL75SHARCTDPGA22H".to_string(),
+        stellar_chain_id: "stellar-testnet".to_string(),
+        cosmos_chain_id: "simd-1".to_string(),
+        event_lookback_ledgers: 17280,
+        cosmos_signer: String::new(),
+        router_genesis_ledger: None,
+        snapshot_database_url: None,
+        follow_seconds: 0,
+    }
+}
+
 #[derive(Default)]
 pub struct MockData {
     pub latest_ledger: u32,
@@ -89,21 +107,7 @@ impl GatewayTest {
 
         let ibc_contract_id = ibc_contract_id.unwrap_or(DEFAULT_ROUTER);
         let id_string = format!("{}", stellar_strkey::Contract(ibc_contract_id));
-        let cfg = GatewayConfig {
-            host: "127.0.0.1".to_string(),
-            grpc_port: 0,
-            api_url,
-            ibc_contract_id: id_string,
-            transfer_contract_id: String::new(),
-            source_account: "GBXDMJBUPSBOG23CYLZDFR5SHS33USHQRSI4XGZUL75SHARCTDPGA22H".to_string(),
-            stellar_chain_id: "stellar-testnet".to_string(),
-            cosmos_chain_id: "simd-1".to_string(),
-            event_lookback_ledgers: 17280,
-            cosmos_signer: String::new(),
-            router_genesis_ledger: None,
-            snapshot_database_url: None,
-            follow_seconds: 0,
-        };
+        let cfg = test_config(api_url, id_string);
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

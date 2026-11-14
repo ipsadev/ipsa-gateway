@@ -9,11 +9,11 @@ use tonic::transport::Server;
 use crate::{api_client::ApiClient, snapshot::SnapshotStore, state::State};
 use crate::{config::GatewayConfig, msg::MsgHandler, query::QueryHandler, relay::RelayHandler};
 
-async fn build_router(cfg: &GatewayConfig) -> Router {
+async fn build_router(cfg: &GatewayConfig) -> anyhow::Result<Router> {
     let api = ApiClient::new(&cfg.api_url);
 
     if cfg.ibc_contract_id.is_empty() {
-        panic!(
+        anyhow::bail!(
             "ROUTER_CONTRACT_ADDRESS is required: the gateway refuses to start without the router \
              it serves proofs for, otherwise any contract's events would be trusted as the router's"
         );
@@ -21,7 +21,7 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
 
     let ibc_contract_id = match stellar_strkey::Contract::from_string(&cfg.ibc_contract_id) {
         Ok(contract) => Some(contract.0),
-        Err(error) => panic!(
+        Err(error) => anyhow::bail!(
             "ROUTER_CONTRACT_ADDRESS {:?} is not a valid Stellar contract strkey: {error}",
             cfg.ibc_contract_id
         ),
@@ -81,7 +81,7 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
         crate::header::ROOT_EVENT_TOPIC,
     ));
 
-    Server::builder()
+    Ok(Server::builder()
         .add_service(reflection_service)
         .add_service(health_service)
         .add_service(
@@ -116,17 +116,16 @@ async fn build_router(cfg: &GatewayConfig) -> Router {
                 cfg.source_account.clone(),
             )
             .into_server(),
-        )
+        ))
 }
 
-pub async fn serve_with_listener(
-    cfg: GatewayConfig,
-    listener: TcpListener,
-) -> Result<(), tonic::transport::Error> {
+pub async fn serve_with_listener(cfg: GatewayConfig, listener: TcpListener) -> anyhow::Result<()> {
     build_router(&cfg)
-        .await
+        .await?
         .serve_with_incoming(TcpListenerStream::new(listener))
-        .await
+        .await?;
+
+    Ok(())
 }
 
 pub async fn run(cfg: GatewayConfig) {
@@ -142,6 +141,7 @@ pub async fn run(cfg: GatewayConfig) {
 
     build_router(&cfg)
         .await
+        .expect("the gateway could not start")
         .serve(grpc_addr)
         .await
         .expect("gRPC server failed");
