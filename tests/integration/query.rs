@@ -531,6 +531,21 @@ async fn the_header_and_published_roots_agree_on_two_router_transactions() {
 }
 
 #[tokio::test]
+async fn two_root_events_in_one_invocation_serve_the_header_without_a_root() {
+    let meta = ledger_meta_with_invocations(&[Some(vec![
+        root_event(ROUTER, "ibc_root", [1u8; 32]),
+        root_event(ROUTER, "ibc_root", ROOT),
+    ])]);
+
+    let header = header_with_meta(meta).await;
+
+    assert!(
+        header.state_root_proof.is_none(),
+        "a router invocation with two root events must still serve the header, just without a state root"
+    );
+}
+
+#[tokio::test]
 async fn state_root_proof_is_absent_without_a_router_event() {
     let other = [3u8; 32];
     let meta =

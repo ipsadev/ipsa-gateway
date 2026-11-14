@@ -239,10 +239,13 @@ impl HeaderAssembler {
             }
 
             if root_events > 1 {
-                bail!(
-                    "a router invocation emitted {root_events} root events in one ledger; \
-                     the verifier accepts a single root per invocation"
+                tracing::warn!(
+                    root_events,
+                    "a router invocation emitted more than one root event; serving the header \
+                     without a state root rather than guessing which one is canonical"
                 );
+
+                return Ok(None);
             }
 
             return Ok(Some((
