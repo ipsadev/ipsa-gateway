@@ -685,6 +685,7 @@ impl State {
 
             for (seq, ledger) in fetched {
                 self.apply_fetched(seq, ledger)?;
+                self.last_processed = Some(seq);
             }
         }
 
