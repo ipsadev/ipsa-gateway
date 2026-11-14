@@ -357,3 +357,32 @@ async fn a_replay_that_fails_in_a_later_batch_does_not_corrupt_the_journal() {
          and re-apply it (which records a wrong journal previous)"
     );
 }
+
+#[tokio::test]
+async fn root_at_ledger_is_the_root_as_of_that_ledger_not_the_current_tree() {
+    let (api_url, data) = start_mock_api().await;
+    let a = write(1, 0xA1);
+    let b = write(2, 0xB2);
+
+    add_published_ledger(&data, 10, a.clone(), root_of(std::slice::from_ref(&a)));
+    add_published_ledger(&data, 20, b.clone(), root_of(&[a.clone(), b.clone()]));
+
+    let mut state = gateway(&api_url, 10);
+    state.root_at(20).await.unwrap();
+
+    assert_eq!(
+        state.root_at_ledger(10).await.unwrap(),
+        root_of(std::slice::from_ref(&a)),
+        "the consensus state at ledger 10 must bind ledger 10's root, not a later one"
+    );
+    assert_eq!(
+        state.root_at_ledger(20).await.unwrap(),
+        root_of(&[a.clone(), b.clone()]),
+    );
+
+    assert_eq!(
+        state.root_at(10).await.unwrap(),
+        root_of(&[a, b]),
+        "root_at stays process-through (the current root); root_at_ledger is the fix create_client needs"
+    );
+}
