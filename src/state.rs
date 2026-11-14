@@ -806,31 +806,17 @@ impl State {
     }
 }
 
-pub const ROOT_EVENT_TOPIC: &[u8] = b"ibc_root";
+pub fn published_root(meta: &LedgerCloseMeta, router: Option<&[u8; 32]>) -> Option<[u8; 32]> {
+    let router = router?;
 
-fn published_root(meta: &LedgerCloseMeta, router: Option<&[u8; 32]>) -> Option<[u8; 32]> {
     let mut latest = None;
 
     for event in ledger_events(meta) {
-        if let Some(router) = router {
-            let Some(id) = event.contract_id.as_ref() else {
-                continue;
-            };
-
-            if id.0 .0 != *router {
-                continue;
-            }
+        if !crate::header::is_router_root_event(&event, router, crate::header::ROOT_EVENT_TOPIC) {
+            continue;
         }
 
         let ContractEventBody::V0(body) = &event.body;
-
-        let is_root = body.topics.first().is_some_and(
-            |topic| matches!(topic, ScVal::Symbol(s) if s.0.as_slice() == ROOT_EVENT_TOPIC),
-        );
-
-        if !is_root {
-            continue;
-        }
 
         if let Some(bytes) = scval_as_bytes(&body.data) {
             if let Ok(root) = <[u8; 32]>::try_from(bytes.as_slice()) {

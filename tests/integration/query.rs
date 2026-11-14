@@ -3,7 +3,8 @@ use prost::Message as _;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
-    InvokeHostFunctionSuccessPreImage, LedgerHeader, Limits, ReadXdr, ScVal, WriteXdr,
+    InvokeHostFunctionSuccessPreImage, LedgerCloseMeta, LedgerHeader, Limits, ReadXdr, ScVal,
+    WriteXdr,
 };
 use tonic::Code;
 
@@ -504,6 +505,29 @@ async fn state_root_proof_binds_the_last_of_two_router_invocations() {
         ROOT.to_vec(),
         "binding the first root would make the header disagree with the end-of-ledger tree"
     );
+}
+
+#[tokio::test]
+async fn the_header_and_published_roots_agree_on_two_router_transactions() {
+    let first = [7u8; 32];
+    let meta_bytes = ledger_meta_with_invocations(&[
+        Some(vec![root_event(ROUTER, "ibc_root", first)]),
+        Some(vec![root_event(ROUTER, "ibc_root", ROOT)]),
+    ]);
+
+    let header = header_with_meta(meta_bytes.clone()).await;
+    let header_root = root_in(&header.state_root_proof.expect("the router emitted roots"));
+
+    let meta = LedgerCloseMeta::from_xdr(&meta_bytes, Limits::none()).unwrap();
+    let published = ipsa_gateway::state::published_root(&meta, Some(&ROUTER))
+        .expect("the router published a root in this ledger");
+
+    assert_eq!(
+        header_root,
+        published.to_vec(),
+        "the header must bind the same root the tree publishes when a ledger has two router transactions"
+    );
+    assert_eq!(header_root, ROOT.to_vec());
 }
 
 #[tokio::test]

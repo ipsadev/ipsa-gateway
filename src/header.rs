@@ -2,14 +2,32 @@ use crate::api_client::{ApiClient, ArchivedLedgerHeader, ScpMaterial};
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
-    ContractEvent, ContractEventBody, InvokeHostFunctionResult, InvokeHostFunctionSuccessPreImage,
-    LedgerCloseMeta, Limits, OperationResult, OperationResultTr, ReadXdr, ScVal, TransactionMeta,
-    TransactionResultPair, TransactionResultResult, WriteXdr,
+    ContractEvent, ContractEventBody, ContractEventType, InvokeHostFunctionResult,
+    InvokeHostFunctionSuccessPreImage, LedgerCloseMeta, Limits, OperationResult, OperationResultTr,
+    ReadXdr, ScVal, TransactionMeta, TransactionResultPair, TransactionResultResult, WriteXdr,
 };
 
 use ipsa::gateway::stellar::{QuorumConfig, StateRootProof, StellarHeader};
 
 pub const ROOT_EVENT_TOPIC: &[u8] = b"ibc_root";
+
+pub(crate) fn is_router_root_event(event: &ContractEvent, router: &[u8; 32], topic: &[u8]) -> bool {
+    if event.type_ != ContractEventType::Contract {
+        return false;
+    }
+
+    let Some(id) = event.contract_id.as_ref() else {
+        return false;
+    };
+
+    if id.0 .0 != *router {
+        return false;
+    }
+
+    let ContractEventBody::V0(body) = &event.body;
+
+    matches!(body.topics.as_slice(), [ScVal::Symbol(sym)] if sym.0.as_slice() == topic)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Network {
@@ -204,13 +222,29 @@ impl HeaderAssembler {
         &self,
         processing: &[(TransactionResultPair, Option<(ScVal, Vec<ContractEvent>)>)],
     ) -> Result<Option<(usize, InvokeHostFunctionSuccessPreImage)>> {
+        let router = self.router_contract_id.as_ref().expect("checked by caller");
+
         for (index, (_, soroban)) in processing.iter().enumerate().rev() {
             let Some((return_value, events)) = soroban else {
                 continue;
             };
-            if !events.iter().any(|e| self.is_router_root_event(e)) {
+
+            let root_events = events
+                .iter()
+                .filter(|e| is_router_root_event(e, router, &self.root_event_topic))
+                .count();
+
+            if root_events == 0 {
                 continue;
             }
+
+            if root_events > 1 {
+                bail!(
+                    "a router invocation emitted {root_events} root events in one ledger; \
+                     the verifier accepts a single root per invocation"
+                );
+            }
+
             return Ok(Some((
                 index,
                 InvokeHostFunctionSuccessPreImage {
@@ -223,20 +257,6 @@ impl HeaderAssembler {
             )));
         }
         Ok(None)
-    }
-
-    fn is_router_root_event(&self, event: &ContractEvent) -> bool {
-        let Some(id) = event.contract_id.as_ref() else {
-            return false;
-        };
-        if id.0 .0 != *self.router_contract_id.as_ref().expect("checked by caller") {
-            return false;
-        }
-        let ContractEventBody::V0(body) = &event.body;
-        body.topics.iter().any(|t| match t {
-            ScVal::Symbol(sym) => sym.0.as_slice() == self.root_event_topic.as_slice(),
-            _ => false,
-        })
     }
 }
 
