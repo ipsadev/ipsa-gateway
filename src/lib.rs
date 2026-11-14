@@ -1,6 +1,7 @@
 pub mod api_client;
 pub mod availability;
 pub mod config;
+pub mod db_tls;
 pub mod event;
 pub mod header;
 pub mod msg;

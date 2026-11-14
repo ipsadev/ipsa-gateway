@@ -26,6 +26,9 @@ RUN apt-get update \
         netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
+ADD --chmod=644 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/rds-global-bundle.pem
+ENV PGSSLROOTCERT=/etc/ssl/rds-global-bundle.pem
+
 WORKDIR /app
 COPY --from=builder /build/target/release/ipsa-gateway /usr/local/bin/ipsa-gateway
 

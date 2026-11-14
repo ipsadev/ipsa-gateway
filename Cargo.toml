@@ -14,7 +14,10 @@ path = "src/main.rs"
 [dependencies]
 ipsa = { workspace = true, features = ["gateway"] }
 ipsa-chains = { workspace = true }
-ipsa-postgres = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+tokio-postgres-rustls = { workspace = true }
+webpki-roots = { workspace = true }
 
 tonic = { workspace = true }
 tonic-health = { workspace = true }
@@ -24,7 +27,7 @@ prost = { workspace = true }
 
 tokio = { workspace = true }
 tokio-stream = { version = "0.1", features = ["net"] }
-tokio-postgres = "0.7"
+tokio-postgres = { workspace = true }
 
 soroban-client = { workspace = true }
 stellar-strkey = { workspace = true }

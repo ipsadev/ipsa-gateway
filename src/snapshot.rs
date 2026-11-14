@@ -67,10 +67,12 @@ impl SnapshotStore {
 }
 
 async fn connect(url: &str) -> anyhow::Result<Client> {
-    let config = ipsa_postgres::config(url).context("parsing GATEWAY_DB_URL")?;
+    let config = crate::db_tls::config(url).context("parsing GATEWAY_DB_URL")?;
+
+    let tls = crate::db_tls::tls().context("loading the database root certificates")?;
 
     let (client, connection) = config
-        .connect(ipsa_postgres::tls())
+        .connect(tls)
         .await
         .context("connecting to the gateway snapshot database")?;
 
