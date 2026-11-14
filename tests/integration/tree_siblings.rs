@@ -11,8 +11,9 @@ use ipsa_gateway::{
 };
 
 use super::mock::{
-    ledger_meta_with_published_write, ledger_meta_with_published_write_and_foreign_root,
-    ledger_meta_with_write, router_event_json, start_mock_api, MockData,
+    ledger_meta_with_invocations, ledger_meta_with_published_write,
+    ledger_meta_with_published_write_and_foreign_root, ledger_meta_with_write, root_event,
+    router_event_json, start_mock_api, MockData,
 };
 
 const CONTRACT: [u8; 32] = [7u8; 32];
@@ -271,4 +272,88 @@ async fn a_foreign_ibc_root_in_the_same_ledger_is_ignored() {
             "the router published its own root; a foreign contract's later ibc_root must not win"
         );
     };
+}
+
+#[tokio::test]
+async fn a_replay_that_fails_in_a_later_batch_does_not_corrupt_the_journal() {
+    let (api_url, data) = start_mock_api().await;
+    let a = write(1, 0xA1);
+    let root = root_of(std::slice::from_ref(&a));
+
+    {
+        let mut d = data.lock().unwrap();
+
+        d.ledgers.insert(
+            10,
+            (
+                vec![],
+                Some(ledger_meta_with_published_write(
+                    CONTRACT,
+                    a.0.clone(),
+                    a.1.clone(),
+                    root,
+                )),
+            ),
+        );
+        d.events.push(router_event_json(CONTRACT, 10));
+
+        for seq in [20u32, 30, 40, 50, 60, 70, 80] {
+            d.ledgers.insert(
+                seq,
+                (
+                    vec![],
+                    Some(ledger_meta_with_invocations(&[Some(vec![root_event(
+                        CONTRACT, "ibc_root", root,
+                    )])])),
+                ),
+            );
+            d.events.push(router_event_json(CONTRACT, seq));
+        }
+
+        d.events.push(router_event_json(CONTRACT, 90));
+        d.fail_ledgers.insert(90);
+        d.latest_ledger = 90;
+    }
+
+    let mut state = gateway(&api_url, 10);
+
+    assert!(
+        state.root_at(90).await.is_err(),
+        "the failed fetch of ledger 90 in the second batch must surface as an error"
+    );
+
+    {
+        let mut d = data.lock().unwrap();
+
+        d.fail_ledgers.remove(&90);
+        d.ledgers.insert(
+            90,
+            (
+                vec![],
+                Some(ledger_meta_with_invocations(&[Some(vec![root_event(
+                    CONTRACT, "ibc_root", root,
+                )])])),
+            ),
+        );
+    }
+
+    state.root_at(90).await.unwrap();
+
+    let PathLookup::Found { .. } = state.proof_for_path(10, &a.0).await.unwrap() else {
+        panic!("ledger 10's write must still prove after the partial replay");
+    };
+
+    let fetches_of_ten = data
+        .lock()
+        .unwrap()
+        .ledger_fetches
+        .get(&10)
+        .copied()
+        .unwrap_or_default();
+
+    assert_eq!(
+        fetches_of_ten, 1,
+        "ledger 10 was applied in the first batch; the retry must resume after it, not re-fetch \
+         and re-apply it (which records a wrong journal previous)"
+    );
 }

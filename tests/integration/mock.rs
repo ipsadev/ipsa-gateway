@@ -92,6 +92,8 @@ pub struct MockData {
     pub full_latest_reads: u32,
     pub event_start_ledgers: Vec<u32>,
     pub ledger_delays: HashMap<u32, std::time::Duration>,
+    pub fail_ledgers: std::collections::HashSet<u32>,
+    pub ledger_fetches: HashMap<u32, u32>,
 }
 
 pub struct GatewayTest {
@@ -222,9 +224,15 @@ async fn ledger_latest_sequence(
 async fn ledger_by_seq(
     AxState(data): AxState<Arc<Mutex<MockData>>>,
     Path(seq): Path<u32>,
-) -> Json<Value> {
+) -> axum::response::Response {
     let ((header, meta), delay) = {
-        let d = data.lock().unwrap();
+        let mut d = data.lock().unwrap();
+
+        *d.ledger_fetches.entry(seq).or_default() += 1;
+
+        if d.fail_ledgers.contains(&seq) {
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
 
         (
             d.ledgers
@@ -243,7 +251,7 @@ async fn ledger_by_seq(
     if let Some(meta) = meta {
         out["metadata_xdr"] = json!(hex::encode(meta));
     }
-    Json(out)
+    Json(out).into_response()
 }
 
 async fn tx_prepare(
