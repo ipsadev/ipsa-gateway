@@ -1,13 +1,5 @@
 use std::collections::HashMap;
 
-fn frame(payload: &[u8]) -> Vec<u8> {
-    let mut out = ((payload.len() as u32) | 0x8000_0000)
-        .to_be_bytes()
-        .to_vec();
-    out.extend_from_slice(payload);
-    out
-}
-
 fn u32be(v: u32) -> [u8; 4] {
     v.to_be_bytes()
 }
@@ -54,20 +46,6 @@ pub fn externalize_envelope(
     out
 }
 
-pub fn scp_file(ledger: u32, quorum_sets: &[Vec<u8>], envelopes: &[Vec<u8>]) -> Vec<u8> {
-    let mut entry = u32be(0).to_vec();
-    entry.extend_from_slice(&u32be(quorum_sets.len() as u32));
-    for q in quorum_sets {
-        entry.extend_from_slice(q);
-    }
-    entry.extend_from_slice(&u32be(ledger));
-    entry.extend_from_slice(&u32be(envelopes.len() as u32));
-    for e in envelopes {
-        entry.extend_from_slice(e);
-    }
-    frame(&entry)
-}
-
 pub fn ledger_header(ledger: u32, close_time: u64) -> Vec<u8> {
     let mut out = u32be(23).to_vec();
     out.extend_from_slice(&[0u8; 32]);
@@ -92,92 +70,11 @@ pub fn ledger_header(ledger: u32, close_time: u64) -> Vec<u8> {
     out
 }
 
-pub fn ledger_file(ledger: u32, close_time: u64) -> (Vec<u8>, [u8; 32]) {
-    use sha2::{Digest, Sha256};
-
-    let header = ledger_header(ledger, close_time);
-    let hash: [u8; 32] = Sha256::digest(&header).into();
-
-    let mut entry = hash.to_vec();
-    entry.extend_from_slice(&header);
-    entry.extend_from_slice(&u32be(0));
-
-    (frame(&entry), hash)
-}
-
 pub fn generalized_tx_set(previous_ledger_hash: [u8; 32]) -> Vec<u8> {
     let mut out = u32be(1).to_vec();
     out.extend_from_slice(&previous_ledger_hash);
     out.extend_from_slice(&u32be(0));
     out
-}
-
-pub fn transactions_file(ledger: u32, previous_ledger_hash: [u8; 32]) -> Vec<u8> {
-    let mut entry = u32be(ledger).to_vec();
-    entry.extend_from_slice(&[0u8; 32]);
-    entry.extend_from_slice(&u32be(0));
-    entry.extend_from_slice(&u32be(1));
-    entry.extend_from_slice(&generalized_tx_set(previous_ledger_hash));
-    frame(&entry)
-}
-
-pub struct HeaderArchive {
-    pub files: HashMap<(String, u32), Vec<u8>>,
-    pub ledger_hash: [u8; 32],
-    pub quorum_set_xdr: Vec<u8>,
-    pub envelope_count: usize,
-}
-
-pub fn header_archive(ledger: u32) -> HeaderArchive {
-    use ipsa_scp_verifier::archive::checkpoint_for;
-    use sha2::{Digest, Sha256};
-
-    let validators: Vec<[u8; 32]> = (1..=4u8).map(|i| [i; 32]).collect();
-    let qset = quorum_set(&validators, 3);
-    let qset_hash: [u8; 32] = Sha256::digest(&qset).into();
-
-    let envelopes = |slot: u64| -> Vec<Vec<u8>> {
-        validators
-            .iter()
-            .map(|v| externalize_envelope(v, slot, b"agreed-value", qset_hash))
-            .collect()
-    };
-
-    let mut scp = scp_file(
-        ledger,
-        std::slice::from_ref(&qset),
-        &envelopes(ledger as u64),
-    );
-    let next_scp = scp_file(
-        ledger + 1,
-        std::slice::from_ref(&qset),
-        &envelopes(ledger as u64 + 1),
-    );
-    let same_checkpoint = checkpoint_for(ledger) == checkpoint_for(ledger + 1);
-    if same_checkpoint {
-        scp.extend_from_slice(&next_scp);
-    }
-
-    let (ledger_bytes, ledger_hash) = ledger_file(ledger, 1_700_000_000);
-    let tx_bytes = transactions_file(ledger + 1, ledger_hash);
-
-    let mut files = HashMap::new();
-    files.insert(("scp".to_string(), checkpoint_for(ledger)), scp);
-    if !same_checkpoint {
-        files.insert(("scp".to_string(), checkpoint_for(ledger + 1)), next_scp);
-    }
-    files.insert(("ledger".to_string(), checkpoint_for(ledger)), ledger_bytes);
-    files.insert(
-        ("transactions".to_string(), checkpoint_for(ledger + 1)),
-        tx_bytes,
-    );
-
-    HeaderArchive {
-        files,
-        ledger_hash,
-        quorum_set_xdr: qset,
-        envelope_count: validators.len(),
-    }
 }
 
 pub struct ArchiveResponses {

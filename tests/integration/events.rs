@@ -1,4 +1,4 @@
-use ipsa_chains::{
+use ipsa_gateway::chains::{
     conversion::{scval_bytes, scval_string, scval_struct, scval_symbol, scval_to_xdr, scval_vec},
     packet::WRITE_ACK,
 };

@@ -19,7 +19,7 @@ impl TryFrom<Any> for AnyClientState {
 
     fn try_from(raw: Any) -> Result<Self> {
         match raw.type_url.as_str() {
-            TENDERMINT_CLIENT_STATE_TYPE_URL => Ok(AnyClientState::Tendermint(
+            TENDERMINT_CLIENT_STATE_TYPE_URL => Ok(Self::Tendermint(
                 Protobuf::<RawTmClientState>::decode_vec(raw.value.as_slice())
                     .map_err(|e| anyhow!("decode tendermint client state: {e}"))?,
             )),
@@ -31,7 +31,7 @@ impl TryFrom<Any> for AnyClientState {
 impl From<AnyClientState> for Any {
     fn from(value: AnyClientState) -> Self {
         match value {
-            AnyClientState::Tendermint(cs) => Any {
+            AnyClientState::Tendermint(cs) => Self {
                 type_url: TENDERMINT_CLIENT_STATE_TYPE_URL.to_string(),
                 value: Protobuf::<RawTmClientState>::encode_vec(cs),
             },
@@ -41,7 +41,7 @@ impl From<AnyClientState> for Any {
 
 impl From<TmClientState> for AnyClientState {
     fn from(cs: TmClientState) -> Self {
-        AnyClientState::Tendermint(cs)
+        Self::Tendermint(cs)
     }
 }
 
@@ -49,30 +49,30 @@ impl AnyClientState {
     pub fn decode_value(bytes: &[u8]) -> Result<Self> {
         let cs = Protobuf::<RawTmClientState>::decode_vec(bytes)
             .map_err(|e| anyhow!("decode tendermint client state value: {e}"))?;
-        Ok(AnyClientState::Tendermint(cs))
+        Ok(Self::Tendermint(cs))
     }
 
     pub fn encode_value(&self) -> Vec<u8> {
         match self {
-            AnyClientState::Tendermint(cs) => Protobuf::<RawTmClientState>::encode_vec(cs.clone()),
+            Self::Tendermint(cs) => Protobuf::<RawTmClientState>::encode_vec(cs.clone()),
         }
     }
 
     pub fn chain_id(&self) -> String {
         match self {
-            AnyClientState::Tendermint(cs) => cs.inner().chain_id.to_string(),
+            Self::Tendermint(cs) => cs.inner().chain_id.to_string(),
         }
     }
 
     pub fn revision_number(&self) -> u64 {
         match self {
-            AnyClientState::Tendermint(cs) => cs.inner().latest_height.revision_number(),
+            Self::Tendermint(cs) => cs.inner().latest_height.revision_number(),
         }
     }
 
     pub fn latest_height(&self) -> u64 {
         match self {
-            AnyClientState::Tendermint(cs) => cs.inner().latest_height.revision_height(),
+            Self::Tendermint(cs) => cs.inner().latest_height.revision_height(),
         }
     }
 }

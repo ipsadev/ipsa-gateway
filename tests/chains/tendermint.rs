@@ -1,5 +1,5 @@
 use ibc_proto::ibc::lightclients::tendermint::v1::Header as RawTmHeader;
-use ipsa_chains::{
+use ipsa_gateway::chains::{
     conversion::scval_from_xdr, soroban::tendermint_header_to_soroban_xdr, tendermint::header_proto,
 };
 use prost::Message;

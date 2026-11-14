@@ -1,5 +1,5 @@
-use ipsa_api::rpc::RpcClient;
-use ipsa_chains::conversion as cv;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use ipsa_gateway::chains::conversion as cv;
 use ipsa_gateway::seed::{seed, RouterReader};
 use soroban_client::xdr::ScVal;
 
@@ -8,8 +8,51 @@ const ROUTER: &str = "CBA7QRXNLV2VGXNB7JALC4ZRPD4Q3SFAJRXFS3NTUJBFLLIDT6AEECSS";
 const CLIENTS: [&str; 3] = ["07-tendermint-0", "07-tendermint-1", "sepolia-0"];
 
 struct LiveRouter {
-    rpc: RpcClient,
+    rpc_url: String,
     contract: [u8; 32],
+}
+
+impl LiveRouter {
+    async fn get_ledger_entries(
+        &self,
+        keys: &[Vec<u8>],
+    ) -> anyhow::Result<(u32, Vec<Option<Vec<u8>>>)> {
+        let keys: Vec<String> = keys.iter().map(|key| BASE64.encode(key)).collect();
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getLedgerEntries",
+            "params": {"keys": keys},
+        });
+
+        let response: serde_json::Value = reqwest::Client::new()
+            .post(&self.rpc_url)
+            .json(&body)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        let result = &response["result"];
+
+        let latest_ledger = result["latestLedger"].as_u64().ok_or_else(|| {
+            anyhow::anyhow!("getLedgerEntries returned no latestLedger: {response}")
+        })?;
+
+        let mut found = std::collections::HashMap::new();
+
+        for entry in result["entries"].as_array().into_iter().flatten() {
+            let key = entry["key"].as_str().unwrap_or_default().to_string();
+            let data = BASE64.decode(entry["xdr"].as_str().unwrap_or_default())?;
+
+            found.insert(key, data);
+        }
+
+        let values = keys.iter().map(|key| found.remove(key)).collect();
+
+        Ok((latest_ledger as u32, values))
+    }
 }
 
 impl RouterReader for LiveRouter {
@@ -23,7 +66,7 @@ impl RouterReader for LiveRouter {
             .map(|key| cv::persistent_contract_data_key(self.contract, key.clone()))
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        let (ledger, entries) = self.rpc.get_ledger_entries(&ledger_keys).await?;
+        let (ledger, entries) = self.get_ledger_entries(&ledger_keys).await?;
 
         let values = entries
             .into_iter()
@@ -41,7 +84,7 @@ async fn the_live_router_is_seeded_from_its_storage_to_its_own_root() {
     };
 
     let router = LiveRouter {
-        rpc: RpcClient::new(&url).expect("rpc client"),
+        rpc_url: url,
         contract: stellar_strkey::Contract::from_string(ROUTER)
             .expect("router")
             .0,

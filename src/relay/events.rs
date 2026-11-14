@@ -1,10 +1,10 @@
 use anyhow::Result;
 
 use crate::api_client::ApiClient;
-use ipsa_chains::packet::{
+use crate::chains::packet::{
     decode_acknowledgements, decode_packet, event_kind, Packet, PacketEvent, SEND_PACKET, WRITE_ACK,
 };
-use ipsa_chains::types::{EventCursor, EventRecord};
+use crate::chains::types::{EventCursor, EventRecord};
 
 const PAGE_LIMIT: u32 = 200;
 const MAX_PAGES: usize = 50;

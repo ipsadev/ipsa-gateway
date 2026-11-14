@@ -6,9 +6,9 @@ use ipsa::gateway::stellar::{
     MsgRegisterCounterpartyRequest, MsgSubmitMisbehaviourRequest, MsgTimeoutPacketRequest,
     MsgUpdateClientRequest, SubmitSignedTxRequest,
 };
-use ipsa_chains::client_state::AnyClientState;
-use ipsa_chains::consensus_state::AnyConsensusState;
-use ipsa_chains::conversion::{
+use ipsa_gateway::chains::client_state::AnyClientState;
+use ipsa_gateway::chains::consensus_state::AnyConsensusState;
+use ipsa_gateway::chains::conversion::{
     scval_as_bytes, scval_bytes, scval_from_xdr, scval_string, scval_to_xdr, scval_vec_of_bytes,
 };
 

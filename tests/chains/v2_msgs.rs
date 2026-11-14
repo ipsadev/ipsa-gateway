@@ -1,4 +1,4 @@
-use ipsa_chains::{
+use ipsa_gateway::chains::{
     msg::{ProtoAny, ProtoMessage},
     v2_msgs::{Height, MsgRecvPacket, Packet, Payload, TYPE_URL_RECV_PACKET},
 };
@@ -92,7 +92,7 @@ const SIGNER: &str = "cosmos1mz5kk8dh85ss9dlx5e99cvkl60x92fkmtk6rxj";
 
 #[test]
 fn v2_messages_use_ibc_go_field_numbers() {
-    use ipsa_chains::v2_msgs::{Acknowledgement, MsgAcknowledgement, MsgTimeout};
+    use ipsa_gateway::chains::v2_msgs::{Acknowledgement, MsgAcknowledgement, MsgTimeout};
 
     let recv = MsgRecvPacket {
         packet: Some(sample_packet()),

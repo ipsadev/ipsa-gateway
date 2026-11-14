@@ -1,4 +1,4 @@
-use ipsa_chains::{
+use ipsa_gateway::chains::{
     msg::{
         ack_msgs, encode_tx_body, recv_msgs, update_client_msg, wasm_client_message,
         MsgUpdateClient, ProtoAny, ProtoMessage, ProtoTxBody, WasmClientMessage,

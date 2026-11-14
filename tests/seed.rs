@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::BTreeMap};
 
-use ipsa_chains::conversion as cv;
+use ipsa_gateway::chains::conversion as cv;
 use ipsa_gateway::seed::{path, root_of, seed, RouterReader, PROBE_BATCH};
 use soroban_client::xdr::ScVal;
 

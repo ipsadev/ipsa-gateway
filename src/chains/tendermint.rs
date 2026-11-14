@@ -11,7 +11,7 @@ use tendermint::{
     validator::{Info as ValidatorInfo, Set as ValidatorSet},
 };
 
-use crate::{client_state::AnyClientState, consensus_state::AnyConsensusState};
+use crate::chains::{client_state::AnyClientState, consensus_state::AnyConsensusState};
 
 pub fn header_proto(
     commit: &Value,

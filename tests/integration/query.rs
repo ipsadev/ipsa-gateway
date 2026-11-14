@@ -1,5 +1,5 @@
 use ibc::primitives::proto::{Any, Protobuf};
-use prost::Message as _;
+use prost_gateway::Message as _;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
@@ -15,8 +15,8 @@ use ipsa::gateway::stellar::{
     QueryClientStatesRequest, QueryConsensusStateRequest, QueryIbcHeaderRequest,
     QueryNextSeqRecvRequest, QueryPacketCommitmentRequest, QueryPacketReceiptRequest,
 };
-use ipsa_chains::client_state::AnyClientState;
-use ipsa_chains::conversion::{
+use ipsa_gateway::chains::client_state::AnyClientState;
+use ipsa_gateway::chains::conversion::{
     scval_bytes, scval_height, scval_string, scval_struct, scval_symbol, scval_to_xdr, scval_vec,
 };
 

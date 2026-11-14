@@ -1,3 +1,4 @@
+mod archive_fixture;
 mod events;
 mod live_seed;
 mod mock;

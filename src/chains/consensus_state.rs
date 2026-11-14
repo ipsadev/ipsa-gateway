@@ -20,7 +20,7 @@ impl TryFrom<Any> for AnyConsensusState {
 
     fn try_from(raw: Any) -> Result<Self> {
         match raw.type_url.as_str() {
-            TENDERMINT_CONSENSUS_STATE_TYPE_URL => Ok(AnyConsensusState::Tendermint(
+            TENDERMINT_CONSENSUS_STATE_TYPE_URL => Ok(Self::Tendermint(
                 Protobuf::<RawTmConsensusState>::decode_vec(raw.value.as_slice())
                     .map_err(|e| anyhow!("decode tendermint consensus state: {e}"))?,
             )),
@@ -32,7 +32,7 @@ impl TryFrom<Any> for AnyConsensusState {
 impl From<AnyConsensusState> for Any {
     fn from(value: AnyConsensusState) -> Self {
         match value {
-            AnyConsensusState::Tendermint(cons) => Any {
+            AnyConsensusState::Tendermint(cons) => Self {
                 type_url: TENDERMINT_CONSENSUS_STATE_TYPE_URL.to_string(),
                 value: Protobuf::<RawTmConsensusState>::encode_vec(cons),
             },
@@ -42,7 +42,7 @@ impl From<AnyConsensusState> for Any {
 
 impl From<TmConsensusState> for AnyConsensusState {
     fn from(cons: TmConsensusState) -> Self {
-        AnyConsensusState::Tendermint(cons)
+        Self::Tendermint(cons)
     }
 }
 
@@ -50,20 +50,18 @@ impl AnyConsensusState {
     pub fn decode_value(bytes: &[u8]) -> Result<Self> {
         let cons = Protobuf::<RawTmConsensusState>::decode_vec(bytes)
             .map_err(|e| anyhow!("decode tendermint consensus state value: {e}"))?;
-        Ok(AnyConsensusState::Tendermint(cons))
+        Ok(Self::Tendermint(cons))
     }
 
     pub fn encode_value(&self) -> Vec<u8> {
         match self {
-            AnyConsensusState::Tendermint(cons) => {
-                Protobuf::<RawTmConsensusState>::encode_vec(cons.clone())
-            }
+            Self::Tendermint(cons) => Protobuf::<RawTmConsensusState>::encode_vec(cons.clone()),
         }
     }
 
     pub fn timestamp_secs(&self) -> u64 {
         match self {
-            AnyConsensusState::Tendermint(cons) => cons.inner().timestamp.unix_timestamp() as u64,
+            Self::Tendermint(cons) => cons.inner().timestamp.unix_timestamp() as u64,
         }
     }
 }

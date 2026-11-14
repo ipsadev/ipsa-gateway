@@ -19,7 +19,7 @@ use ibc_proto::{
 use prost::Message;
 use soroban_client::xdr::{ScMap, ScVal};
 
-use crate::{
+use crate::chains::{
     client_state::AnyClientState,
     consensus_state::AnyConsensusState,
     conversion::{
@@ -38,7 +38,7 @@ fn sc_get_height(map: &ScMap, name: &str) -> Result<RawHeight> {
 
 impl AnyClientState {
     pub fn to_soroban_xdr(&self) -> Result<Vec<u8>> {
-        let AnyClientState::Tendermint(cs) = self;
+        let Self::Tendermint(cs) = self;
         let cs = cs.inner();
 
         let trust_level = scval_struct(vec![
@@ -122,7 +122,7 @@ impl AnyClientState {
         let cs = TmClientState::try_from(raw)
             .map_err(|e| anyhow!("tendermint client state from raw: {e}"))?;
 
-        Ok(AnyClientState::Tendermint(cs))
+        Ok(Self::Tendermint(cs))
     }
 }
 
@@ -201,7 +201,7 @@ pub fn tendermint_header_to_soroban_xdr(header_bytes: &[u8]) -> Result<Vec<u8>> 
 
 impl AnyConsensusState {
     pub fn to_soroban_xdr(&self) -> Result<Vec<u8>> {
-        let AnyConsensusState::Tendermint(cons) = self;
+        let Self::Tendermint(cons) = self;
         let cons = cons.inner();
 
         let timestamp_secs = cons.timestamp.unix_timestamp().max(0) as u64;
@@ -237,6 +237,6 @@ impl AnyConsensusState {
         let cons = TmConsensusState::try_from(raw)
             .map_err(|e| anyhow!("tendermint consensus state from raw: {e}"))?;
 
-        Ok(AnyConsensusState::Tendermint(cons))
+        Ok(Self::Tendermint(cons))
     }
 }

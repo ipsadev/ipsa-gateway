@@ -3,7 +3,7 @@ pub mod events;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost::Message as _;
+use prost_gateway::Message as _;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
@@ -15,17 +15,17 @@ use tonic::{Request, Response, Status};
 
 use crate::api_client::{ApiClient, CosmosPacketEvent};
 use crate::availability::{cosmos_header_status, header_assembly_status};
+use crate::chains::client_state::AnyClientState;
+use crate::chains::conversion::{scval_bytes, scval_string, scval_u64, scval_vec_of_bytes};
+use crate::chains::msg::{self, ProtoAny};
+use crate::chains::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
+use crate::chains::soroban::tendermint_header_to_soroban_xdr;
+use crate::chains::tendermint::{tendermint_genesis, TendermintBootstrap};
+use crate::chains::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket, MsgTimeout};
 use crate::state::{PathLookup, State};
 use ipsa::core::commitment::{
     acknowledgement_commitment_path, packet_commitment_path, packet_receipt_path,
 };
-use ipsa_chains::client_state::AnyClientState;
-use ipsa_chains::conversion::{scval_bytes, scval_string, scval_u64, scval_vec_of_bytes};
-use ipsa_chains::msg::{self, ProtoAny};
-use ipsa_chains::packet::{PacketEvent, SEND_PACKET, WRITE_ACK};
-use ipsa_chains::soroban::tendermint_header_to_soroban_xdr;
-use ipsa_chains::tendermint::{tendermint_genesis, TendermintBootstrap};
-use ipsa_chains::v2_msgs::{Height, MsgAcknowledgement, MsgRecvPacket, MsgTimeout};
 
 use ipsa::gateway::proofapi::{
     proof_api_service_server::{ProofApiService, ProofApiServiceServer},

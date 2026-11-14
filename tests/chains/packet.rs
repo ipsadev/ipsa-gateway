@@ -1,4 +1,4 @@
-use ipsa_chains::packet::decode_packet;
+use ipsa_gateway::chains::packet::decode_packet;
 
 const SEND_PACKET_EVENT: &[u8] = &[
     0, 0, 0, 17, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 15, 0, 0, 0, 6, 112, 97, 99, 107, 101, 116, 0, 0,

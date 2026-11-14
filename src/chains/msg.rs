@@ -16,7 +16,7 @@ use prost::Message;
 pub use prost::Message as ProtoMessage;
 use soroban_client::xdr::ScVal;
 
-use crate::{
+use crate::chains::{
     conversion::{scval_bytes, scval_string, scval_struct, scval_vec},
     packet::{PacketEvent, SEND_PACKET, WRITE_ACK},
     v2_msgs::{
@@ -90,7 +90,7 @@ pub fn update_client_msg(client_id: &str, client_message: Any, signer: &str) -> 
     }
 }
 
-pub fn to_proto_packet(packet: &crate::packet::Packet) -> Packet {
+pub fn to_proto_packet(packet: &crate::chains::packet::Packet) -> Packet {
     Packet {
         sequence: packet.sequence,
         source_client: packet.source_client.clone(),

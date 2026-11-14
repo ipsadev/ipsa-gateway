@@ -1,4 +1,4 @@
-use ipsa_chains::conversion::{
+use crate::chains::conversion::{
     scval_as_bytes, scval_as_map, scval_as_string, scval_as_symbol, scval_as_u64, scval_field,
     scval_from_xdr,
 };

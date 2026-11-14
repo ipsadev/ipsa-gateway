@@ -1,4 +1,4 @@
-use ipsa_chains::packet::{Packet, PacketEvent, SEND_PACKET, WRITE_ACK};
+use ipsa_gateway::chains::packet::{Packet, PacketEvent, SEND_PACKET, WRITE_ACK};
 use ipsa_gateway::relay::{filter_sequences, proof_ledger};
 
 fn event(kind: &str, sequence: u64, ledger: u32) -> PacketEvent {
