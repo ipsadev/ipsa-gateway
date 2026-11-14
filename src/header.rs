@@ -2,9 +2,10 @@ use crate::api_client::{ApiClient, ArchivedLedgerHeader, ScpMaterial};
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
-    ContractEvent, ContractEventBody, ContractEventType, InvokeHostFunctionResult,
-    InvokeHostFunctionSuccessPreImage, LedgerCloseMeta, Limits, OperationResult, OperationResultTr,
-    ReadXdr, ScVal, TransactionMeta, TransactionResultPair, TransactionResultResult, WriteXdr,
+    ContractEvent, ContractEventBody, ContractEventType, InnerTransactionResultResult,
+    InvokeHostFunctionResult, InvokeHostFunctionSuccessPreImage, LedgerCloseMeta, Limits,
+    OperationResult, OperationResultTr, ReadXdr, ScVal, TransactionMeta, TransactionResultPair,
+    TransactionResultResult, WriteXdr,
 };
 
 use ipsa::gateway::stellar::{QuorumConfig, StateRootProof, StellarHeader};
@@ -229,23 +230,11 @@ impl HeaderAssembler {
                 continue;
             };
 
-            let root_events = events
+            if !events
                 .iter()
-                .filter(|e| is_router_root_event(e, router, &self.root_event_topic))
-                .count();
-
-            if root_events == 0 {
+                .any(|e| is_router_root_event(e, router, &self.root_event_topic))
+            {
                 continue;
-            }
-
-            if root_events > 1 {
-                tracing::warn!(
-                    root_events,
-                    "a router invocation emitted more than one root event; serving the header \
-                     without a state root rather than guessing which one is canonical"
-                );
-
-                return Ok(None);
             }
 
             return Ok(Some((
@@ -312,8 +301,13 @@ fn invocation_success_hash(pair_xdr: &[u8]) -> Result<[u8; 32]> {
     let pair = TransactionResultPair::from_xdr(pair_xdr, Limits::none())
         .map_err(|e| anyhow!("TransactionResultPair decode: {e}"))?;
 
-    let TransactionResultResult::TxSuccess(ops) = &pair.result.result else {
-        bail!("the referenced transaction did not succeed");
+    let ops = match &pair.result.result {
+        TransactionResultResult::TxSuccess(ops) => ops,
+        TransactionResultResult::TxFeeBumpInnerSuccess(inner) => match &inner.result.result {
+            InnerTransactionResultResult::TxSuccess(ops) => ops,
+            _ => bail!("the fee-bumped inner transaction did not succeed"),
+        },
+        _ => bail!("the referenced transaction did not succeed"),
     };
     let [OperationResult::OpInner(OperationResultTr::InvokeHostFunction(
         InvokeHostFunctionResult::Success(hash),

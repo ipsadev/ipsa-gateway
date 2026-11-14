@@ -22,8 +22,8 @@ use ipsa_chains::conversion::{
 };
 
 use super::mock::{
-    ledger_meta_with_invocations, ledger_meta_with_write, root_event, router_event_json,
-    GatewayTest,
+    ledger_meta_with_fee_bumped_invocation, ledger_meta_with_invocations, ledger_meta_with_write,
+    root_event, router_event_json, GatewayTest,
 };
 
 pub fn client_state_xdr() -> Vec<u8> {
@@ -555,7 +555,7 @@ async fn the_header_and_published_roots_agree_on_two_router_transactions() {
 }
 
 #[tokio::test]
-async fn two_root_events_in_one_invocation_serve_the_header_without_a_root() {
+async fn two_root_events_in_one_invocation_still_bind_a_root() {
     let meta = ledger_meta_with_invocations(&[Some(vec![
         root_event(ROUTER, "ibc_root", [1u8; 32]),
         root_event(ROUTER, "ibc_root", ROOT),
@@ -564,9 +564,21 @@ async fn two_root_events_in_one_invocation_serve_the_header_without_a_root() {
     let header = header_with_meta(meta).await;
 
     assert!(
-        header.state_root_proof.is_none(),
-        "a router invocation with two root events must still serve the header, just without a state root"
+        header.state_root_proof.is_some(),
+        "an invocation with several router root events binds the proof carrying them; the verifier takes the last as canonical"
     );
+}
+
+#[tokio::test]
+async fn a_fee_bumped_router_invocation_still_proves_its_root() {
+    let meta = ledger_meta_with_fee_bumped_invocation(vec![root_event(ROUTER, "ibc_root", ROOT)]);
+
+    let header = header_with_meta(meta).await;
+
+    let proof = header
+        .state_root_proof
+        .expect("a fee-bumped router transaction must still bind its state root");
+    assert_eq!(root_in(&proof), ROOT.to_vec());
 }
 
 #[tokio::test]
