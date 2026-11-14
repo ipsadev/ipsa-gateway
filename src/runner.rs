@@ -12,20 +12,22 @@ use crate::{config::GatewayConfig, msg::MsgHandler, query::QueryHandler, relay::
 async fn build_router(cfg: &GatewayConfig) -> Router {
     let api = ApiClient::new(&cfg.api_url);
 
-    let ibc_contract_id = if cfg.ibc_contract_id.is_empty() {
-        tracing::warn!("ROUTER_CONTRACT_ADDRESS is empty — state state will accept any contract");
-        None
-    } else {
-        match stellar_strkey::Contract::from_string(&cfg.ibc_contract_id) {
-            Ok(contract) => Some(contract.0),
-            Err(error) => {
-                tracing::warn!(%error, "ROUTER_CONTRACT_ADDRESS could not be parsed as a Stellar contract strkey");
-                None
-            }
-        }
+    if cfg.ibc_contract_id.is_empty() {
+        panic!(
+            "ROUTER_CONTRACT_ADDRESS is required: the gateway refuses to start without the router \
+             it serves proofs for, otherwise any contract's events would be trusted as the router's"
+        );
+    }
+
+    let ibc_contract_id = match stellar_strkey::Contract::from_string(&cfg.ibc_contract_id) {
+        Ok(contract) => Some(contract.0),
+        Err(error) => panic!(
+            "ROUTER_CONTRACT_ADDRESS {:?} is not a valid Stellar contract strkey: {error}",
+            cfg.ibc_contract_id
+        ),
     };
 
-    let router_address = (!cfg.ibc_contract_id.is_empty()).then(|| cfg.ibc_contract_id.clone());
+    let router_address = Some(cfg.ibc_contract_id.clone());
 
     if cfg.router_genesis_ledger.is_none() {
         tracing::warn!(

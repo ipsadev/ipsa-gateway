@@ -46,6 +46,8 @@ pub struct PrepareCall {
     pub args: Vec<Vec<u8>>,
 }
 
+pub const DEFAULT_ROUTER: [u8; 32] = [0xD7; 32];
+
 #[derive(Default)]
 pub struct MockData {
     pub latest_ledger: u32,
@@ -85,9 +87,8 @@ impl GatewayTest {
     pub async fn start(ibc_contract_id: Option<[u8; 32]>) -> Self {
         let (api_url, data) = start_mock_api().await;
 
-        let id_string = ibc_contract_id
-            .map(|c| format!("{}", stellar_strkey::Contract(c)))
-            .unwrap_or_default();
+        let ibc_contract_id = ibc_contract_id.unwrap_or(DEFAULT_ROUTER);
+        let id_string = format!("{}", stellar_strkey::Contract(ibc_contract_id));
         let cfg = GatewayConfig {
             host: "127.0.0.1".to_string(),
             grpc_port: 0,
