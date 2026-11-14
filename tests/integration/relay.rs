@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use prost_gateway::Message as _;
+use prost::Message as _;
 use serde_json::json;
 use tonic::Code;
 
-use ipsa_gateway::chains::msg::{
+use ipsa_chains::msg::{
     MsgCreateClient, MsgUpdateClient, ProtoMessage as _, ProtoTxBody, WasmClientMessage,
     WasmClientState, WasmConsensusState,
 };
@@ -406,12 +406,12 @@ async fn create_client_builds_the_tendermint_client_for_stellar() {
 }
 
 fn cosmos_packet_proto(sequence: u64, source: &str, dest: &str) -> Vec<u8> {
-    ipsa_gateway::chains::msg::encode_packet(&ipsa_gateway::chains::v2_msgs::Packet {
+    ipsa_chains::msg::encode_packet(&ipsa_chains::v2_msgs::Packet {
         sequence,
         source_client: source.to_string(),
         dest_client: dest.to_string(),
         timeout_timestamp: 1_800_000_000,
-        payloads: vec![ipsa_gateway::chains::v2_msgs::Payload {
+        payloads: vec![ipsa_chains::v2_msgs::Payload {
             source_port: "transfer".to_string(),
             dest_port: "transfer".to_string(),
             version: "ics20-1".to_string(),
@@ -725,7 +725,7 @@ const STELLAR_SEND_TX: &str = "deadbeef";
 const TIMEOUT_SEQUENCE: u64 = 5;
 
 fn stellar_send_event(source: &str, dest: &str, sequence: u64) -> serde_json::Value {
-    use ipsa_gateway::chains::conversion::{
+    use ipsa_chains::conversion::{
         scval_bytes, scval_string, scval_struct, scval_symbol, scval_to_xdr, scval_vec,
     };
     use soroban_client::xdr::ScVal;

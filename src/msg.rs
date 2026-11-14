@@ -1,7 +1,4 @@
 use crate::api_client::ApiClient;
-use crate::chains::client_state::AnyClientState;
-use crate::chains::consensus_state::AnyConsensusState;
-use crate::chains::conversion::{self as cv, scval_u64};
 use ipsa::gateway::stellar::{
     stellar_gateway_msg_server::{StellarGatewayMsg, StellarGatewayMsgServer},
     MsgAckPacketRequest, MsgAckPacketResponse, MsgCommitRootRequest, MsgCommitRootResponse,
@@ -10,6 +7,9 @@ use ipsa::gateway::stellar::{
     MsgSubmitMisbehaviourResponse, MsgTimeoutPacketRequest, MsgTimeoutPacketResponse,
     MsgUpdateClientRequest, MsgUpdateClientResponse, SubmitSignedTxRequest, SubmitSignedTxResponse,
 };
+use ipsa_chains::client_state::AnyClientState;
+use ipsa_chains::consensus_state::AnyConsensusState;
+use ipsa_chains::conversion::{self as cv, scval_u64};
 use soroban_client::xdr::ScVal;
 use tonic::{Request, Response, Status};
 
@@ -216,7 +216,7 @@ impl StellarGatewayMsg for MsgHandler {
         );
 
         let header_xdr = if req.client_id.starts_with("07-tendermint") {
-            crate::chains::soroban::tendermint_header_to_soroban_xdr(&req.header).map_err(|e| {
+            ipsa_chains::soroban::tendermint_header_to_soroban_xdr(&req.header).map_err(|e| {
                 Status::invalid_argument(format!("tendermint header to soroban xdr: {e}"))
             })?
         } else {

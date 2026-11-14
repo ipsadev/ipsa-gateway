@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::chains::conversion as cv;
 use anyhow::{bail, Context, Result};
 use ipsa::core::smt::Smt;
+use ipsa_chains::conversion as cv;
 use soroban_client::xdr::ScVal;
 
 pub const PROBE_BATCH: u64 = 64;

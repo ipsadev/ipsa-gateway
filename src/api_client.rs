@@ -1,5 +1,5 @@
 use crate::availability::{cosmos_height_pending, HEIGHT_ATTEMPTS, HEIGHT_WAIT};
-use crate::chains::{
+use ipsa_chains::{
     conversion::string_field,
     types::{EventCursor, EventRecord, EventsPage, LedgerData, SubmittedTx},
 };
@@ -134,7 +134,7 @@ impl ApiClient {
     ) -> anyhow::Result<(u32, Vec<Option<soroban_client::xdr::ScVal>>)> {
         let keys_xdr = keys
             .iter()
-            .map(|key| crate::chains::conversion::scval_to_xdr(key).map(hex::encode))
+            .map(|key| ipsa_chains::conversion::scval_to_xdr(key).map(hex::encode))
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         let body = self
@@ -158,7 +158,7 @@ impl ApiClient {
                 Some(hex_xdr) => {
                     let bytes = hex::decode(hex_xdr)?;
 
-                    crate::chains::conversion::scval_from_xdr(&bytes).map(Some)
+                    ipsa_chains::conversion::scval_from_xdr(&bytes).map(Some)
                 }
                 None => Ok(None),
             })
@@ -409,7 +409,7 @@ impl ApiClient {
             Some(value_hex) => {
                 let bytes = hex::decode(value_hex)
                     .map_err(|e| anyhow::anyhow!("return_value_xdr hex decode: {e}"))?;
-                Some(crate::chains::conversion::scval_from_xdr(&bytes)?)
+                Some(ipsa_chains::conversion::scval_from_xdr(&bytes)?)
             }
             _ => None,
         };
@@ -457,7 +457,7 @@ fn hex_array(body: &serde_json::Value, key: &str) -> anyhow::Result<Vec<Vec<u8>>
 pub struct CosmosPacketEvent {
     pub kind: String,
     pub height: u64,
-    pub packet: crate::chains::v2_msgs::Packet,
+    pub packet: ipsa_chains::v2_msgs::Packet,
     pub acknowledgements: Vec<Vec<u8>>,
 }
 
@@ -514,7 +514,7 @@ impl ApiClient {
             out.push(CosmosPacketEvent {
                 kind,
                 height,
-                packet: crate::chains::msg::decode_packet(&packet_proto)?,
+                packet: ipsa_chains::msg::decode_packet(&packet_proto)?,
                 acknowledgements,
             });
         }

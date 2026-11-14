@@ -1,6 +1,5 @@
 pub mod api_client;
 pub mod availability;
-pub mod chains;
 pub mod config;
 pub mod db_tls;
 pub mod event;

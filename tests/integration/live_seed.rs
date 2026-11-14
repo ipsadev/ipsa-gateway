@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use ipsa_gateway::chains::conversion as cv;
+use ipsa_chains::conversion as cv;
 use ipsa_gateway::seed::{seed, RouterReader};
 use soroban_client::xdr::ScVal;
 

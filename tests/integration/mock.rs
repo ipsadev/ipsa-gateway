@@ -36,7 +36,7 @@ use ibc_proto::ibc::lightclients::tendermint::v1::{
 use ipsa::gateway::proofapi::proof_api_service_client::ProofApiServiceClient;
 use ipsa::gateway::stellar::stellar_gateway_msg_client::StellarGatewayMsgClient;
 use ipsa::gateway::stellar::stellar_gateway_query_client::StellarGatewayQueryClient;
-use ipsa_gateway::chains::conversion::{scval_bytes, scval_struct};
+use ipsa_chains::conversion::{scval_bytes, scval_struct};
 use ipsa_gateway::config::GatewayConfig;
 use ipsa_gateway::runner;
 
