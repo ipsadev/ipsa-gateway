@@ -148,6 +148,16 @@ impl State {
         self.process_through(seq).await
     }
 
+    pub async fn root_at_ledger(&mut self, seq: u32) -> anyhow::Result<[u8; 32]> {
+        self.root_at(seq).await?;
+
+        if let Some(&root) = self.published.get(&seq) {
+            return Ok(root);
+        }
+
+        Ok(self.tree_at(seq).await?.0.root())
+    }
+
     pub async fn proof_for_path(&mut self, seq: u32, key: &[u8]) -> anyhow::Result<PathLookup> {
         let (tree, _) = self.tree_at(seq).await?;
 
@@ -544,7 +554,9 @@ impl State {
         let start = match self.last_processed {
             Some(last) if last >= seq => {
                 let root = self.smt.root();
-                self.roots.insert(seq, root);
+                if last == seq {
+                    self.roots.insert(seq, root);
+                }
                 return Ok(root);
             }
             Some(last) => last + 1,

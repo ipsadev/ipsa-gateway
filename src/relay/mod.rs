@@ -419,9 +419,9 @@ impl RelayHandler {
             .state
             .lock()
             .await
-            .root_at(slot)
+            .root_at_ledger(slot)
             .await
-            .map_err(|error| Status::internal(format!("root_at failed: {error}")))?;
+            .map_err(|error| Status::internal(format!("root_at_ledger failed: {error}")))?;
 
         Ok(StellarConsensusState {
             timestamp: decoded.scp_value.close_time.0,
