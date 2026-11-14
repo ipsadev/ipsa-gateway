@@ -10,14 +10,15 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use soroban_client::xdr::{
     ContractDataDurability, ContractDataEntry, ContractEvent, ContractEventBody, ContractEventType,
-    ContractEventV0, ContractId, ExtensionPoint, Hash, InvokeHostFunctionResult,
-    InvokeHostFunctionSuccessPreImage, LedgerCloseMeta, LedgerCloseMetaExt, LedgerCloseMetaV0,
-    LedgerCloseMetaV2, LedgerEntry, LedgerEntryChange, LedgerEntryChanges, LedgerEntryData,
-    LedgerEntryExt, Limits, OperationMeta, OperationMetaV2, OperationResult, OperationResultTr,
-    ScSymbol, ScVal, SorobanTransactionMetaExt, SorobanTransactionMetaV2, StringM, TransactionMeta,
-    TransactionMetaV1, TransactionMetaV4, TransactionResult, TransactionResultExt,
-    TransactionResultMeta, TransactionResultMetaV1, TransactionResultPair, TransactionResultResult,
-    VecM, WriteXdr,
+    ContractEventV0, ContractId, ExtensionPoint, Hash, InnerTransactionResult,
+    InnerTransactionResultExt, InnerTransactionResultPair, InnerTransactionResultResult,
+    InvokeHostFunctionResult, InvokeHostFunctionSuccessPreImage, LedgerCloseMeta,
+    LedgerCloseMetaExt, LedgerCloseMetaV0, LedgerCloseMetaV2, LedgerEntry, LedgerEntryChange,
+    LedgerEntryChanges, LedgerEntryData, LedgerEntryExt, Limits, OperationMeta, OperationMetaV2,
+    OperationResult, OperationResultTr, ScSymbol, ScVal, SorobanTransactionMetaExt,
+    SorobanTransactionMetaV2, StringM, TransactionMeta, TransactionMetaV1, TransactionMetaV4,
+    TransactionResult, TransactionResultExt, TransactionResultMeta, TransactionResultMetaV1,
+    TransactionResultPair, TransactionResultResult, VecM, WriteXdr,
 };
 use tokio::net::TcpListener;
 use tonic::transport::Channel;
@@ -859,4 +860,75 @@ async fn archive_tx_set(
 ) -> (axum::http::StatusCode, Json<Value>) {
     let found = data.lock().unwrap().archive_tx_sets.get(&ledger).cloned();
     archive_lookup(found, "generalized tx set", ledger)
+}
+
+fn fee_bump_success_result(events: &[ContractEvent]) -> TransactionResultPair {
+    let preimage = InvokeHostFunctionSuccessPreImage {
+        return_value: ScVal::Void,
+        events: events.to_vec().try_into().unwrap(),
+    };
+    let hash: [u8; 32] = Sha256::digest(preimage.to_xdr(Limits::none()).unwrap()).into();
+
+    let ops = vec![OperationResult::OpInner(
+        OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Success(Hash(hash))),
+    )]
+    .try_into()
+    .unwrap();
+
+    TransactionResultPair {
+        transaction_hash: Hash([0u8; 32]),
+        result: TransactionResult {
+            fee_charged: 200,
+            result: TransactionResultResult::TxFeeBumpInnerSuccess(InnerTransactionResultPair {
+                transaction_hash: Hash([0u8; 32]),
+                result: InnerTransactionResult {
+                    fee_charged: 100,
+                    result: InnerTransactionResultResult::TxSuccess(ops),
+                    ext: InnerTransactionResultExt::V0,
+                },
+            }),
+            ext: TransactionResultExt::V0,
+        },
+    }
+}
+
+pub fn ledger_meta_with_fee_bumped_invocation(events: Vec<ContractEvent>) -> Vec<u8> {
+    let meta = TransactionMeta::V4(TransactionMetaV4 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: LedgerEntryChanges(VecM::default()),
+        operations: vec![OperationMetaV2 {
+            ext: ExtensionPoint::V0,
+            changes: LedgerEntryChanges(VecM::default()),
+            events: events.clone().try_into().unwrap(),
+        }]
+        .try_into()
+        .unwrap(),
+        tx_changes_after: LedgerEntryChanges(VecM::default()),
+        soroban_meta: Some(SorobanTransactionMetaV2 {
+            ext: SorobanTransactionMetaExt::V0,
+            return_value: Some(ScVal::Void),
+        }),
+        events: VecM::default(),
+        diagnostic_events: VecM::default(),
+    });
+
+    let v2 = LedgerCloseMetaV2 {
+        ext: LedgerCloseMetaExt::V0,
+        ledger_header: Default::default(),
+        tx_set: Default::default(),
+        tx_processing: vec![TransactionResultMetaV1 {
+            ext: ExtensionPoint::V0,
+            result: fee_bump_success_result(&events),
+            fee_processing: LedgerEntryChanges(VecM::default()),
+            tx_apply_processing: meta,
+            post_tx_apply_fee_processing: LedgerEntryChanges(VecM::default()),
+        }]
+        .try_into()
+        .unwrap(),
+        upgrades_processing: VecM::default(),
+        scp_info: VecM::default(),
+        total_byte_size_of_live_soroban_state: 0,
+        evicted_keys: VecM::default(),
+    };
+    LedgerCloseMeta::V2(v2).to_xdr(Limits::none()).unwrap()
 }
