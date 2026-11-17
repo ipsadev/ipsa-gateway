@@ -292,7 +292,7 @@ async fn register_counterparty_forwards_ids_and_prefix() {
         .register_counterparty(MsgRegisterCounterpartyRequest {
             client_id: "07-tendermint-0".into(),
             counterparty_client_id: "08-wasm-0".into(),
-            counterparty_commitment_prefix: vec![b"ibc".to_vec()],
+            counterparty_commitment_prefix: vec![b"ibc".to_vec(), Vec::new()],
             signer: "GSIGNER".into(),
         })
         .await
@@ -316,7 +316,7 @@ async fn register_counterparty_forwards_ids_and_prefix() {
         );
         assert_eq!(
             scval_from_xdr(&call.args[2]).unwrap(),
-            scval_vec_of_bytes(&[b"ibc".to_vec()]).unwrap()
+            scval_vec_of_bytes(&[b"ibc".to_vec(), Vec::new()]).unwrap()
         );
     });
 }
