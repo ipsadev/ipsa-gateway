@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use prost::Message as _;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tonic::Code;
 
 use ipsa_chains::msg::{
@@ -39,8 +40,20 @@ fn parameters(quorum_configs: serde_json::Value) -> HashMap<String, String> {
     ])
 }
 
+fn fingerprint() -> String {
+    hex::encode(Sha256::digest(hex::decode(quorum_set_xdr()).unwrap()))
+}
+
+fn config(valid_from: u64) -> serde_json::Value {
+    json!({
+        "quorum_set_xdr": quorum_set_xdr(),
+        "valid_from": valid_from,
+        "quorum_set_fingerprint": fingerprint(),
+    })
+}
+
 fn one_config() -> serde_json::Value {
-    json!([{ "quorum_set_xdr": quorum_set_xdr(), "valid_from": 0 }])
+    json!([config(0)])
 }
 
 async fn start_with(latest: u32, meta: Vec<u8>) -> GatewayTest {
@@ -111,6 +124,11 @@ async fn create_client_builds_a_wasm_wrapped_stellar_client() {
     assert_eq!(
         inner.quorum_configs[0].quorum_set_xdr,
         hex::decode(quorum_set_xdr()).unwrap()
+    );
+    assert_eq!(
+        hex::encode(&inner.quorum_configs[0].quorum_set_fingerprint),
+        fingerprint(),
+        "the operator's pin is copied into the client state as given"
     );
     assert_eq!(
         inner.max_consensus_age,
@@ -187,10 +205,7 @@ async fn create_client_rejects_an_empty_trust_root() {
 #[tokio::test]
 async fn create_client_rejects_configurations_sharing_a_valid_from() {
     let t = start().await;
-    let two = json!([
-        { "quorum_set_xdr": quorum_set_xdr(), "valid_from": 0 },
-        { "quorum_set_xdr": quorum_set_xdr(), "valid_from": 0 },
-    ]);
+    let two = json!([config(0), config(0),]);
 
     let err = t
         .relay()
@@ -213,10 +228,7 @@ async fn create_client_rejects_configurations_sharing_a_valid_from() {
 #[tokio::test]
 async fn create_client_keeps_a_rotation_with_distinct_ranges() {
     let t = start().await;
-    let rotation = json!([
-        { "quorum_set_xdr": quorum_set_xdr(), "valid_from": 0 },
-        { "quorum_set_xdr": quorum_set_xdr(), "valid_from": 4_000_000 },
-    ]);
+    let rotation = json!([config(0), config(4_000_000),]);
 
     let resp = t
         .relay()
@@ -232,6 +244,89 @@ async fn create_client_keeps_a_rotation_with_distinct_ranges() {
     let (inner, _) = stellar_client_state(&resp.tx);
     assert_eq!(inner.quorum_configs.len(), 2);
     assert_eq!(inner.quorum_configs[1].valid_from, 4_000_000);
+}
+
+async fn refused_quorum_config(entry: serde_json::Value) -> tonic::Status {
+    let t = start().await;
+
+    t.relay()
+        .create_client(CreateClientRequest {
+            src_chain: STELLAR.to_string(),
+            dst_chain: COSMOS.to_string(),
+            parameters: parameters(json!([entry])),
+        })
+        .await
+        .unwrap_err()
+}
+
+#[tokio::test]
+async fn create_client_requires_a_fingerprint() {
+    let err = refused_quorum_config(json!({
+        "quorum_set_xdr": quorum_set_xdr(),
+        "valid_from": 0,
+    }))
+    .await;
+
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(
+        err.message()
+            .contains("pins no 32-byte quorum_set_fingerprint"),
+        "got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn create_client_refuses_a_fingerprint_that_is_not_32_bytes() {
+    let err = refused_quorum_config(json!({
+        "quorum_set_xdr": quorum_set_xdr(),
+        "valid_from": 7,
+        "quorum_set_fingerprint": hex::encode([1u8; 31]),
+    }))
+    .await;
+
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(
+        err.message().contains("valid_from 7 pins no 32-byte"),
+        "got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn create_client_refuses_a_fingerprint_that_is_not_hex() {
+    let err = refused_quorum_config(json!({
+        "quorum_set_xdr": quorum_set_xdr(),
+        "valid_from": 0,
+        "quorum_set_fingerprint": "zz",
+    }))
+    .await;
+
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(
+        err.message()
+            .contains("quorum_set_fingerprint (valid_from 0)"),
+        "got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn create_client_refuses_a_quorum_set_that_does_not_match_its_fingerprint() {
+    let err = refused_quorum_config(json!({
+        "quorum_set_xdr": quorum_set_xdr(),
+        "valid_from": 0,
+        "quorum_set_fingerprint": hex::encode([9u8; 32]),
+    }))
+    .await;
+
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(
+        err.message()
+            .contains("not the pinned quorum_set_fingerprint"),
+        "got: {}",
+        err.message()
+    );
 }
 
 fn update_header(tx: &[u8]) -> (String, ipsa::gateway::stellar::StellarHeader) {

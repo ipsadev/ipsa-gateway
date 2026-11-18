@@ -67,6 +67,16 @@ The gateway saves its state tree to `GATEWAY_DB_URL` through `src/db_tls.rs`, wh
 
 The bundle is not in the code. The image downloads Amazon's global bundle from `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` to `/etc/ssl/rds-global-bundle.pem` when it is built, and sets `PGSSLROOTCERT` to it, so a rotation of RDS' certificate authorities needs a rebuild, not a code change. Outside the image, leave `PGSSLROOTCERT` unset to trust only the web roots, or point it at a downloaded bundle.
 
+## Creating the Stellar client
+
+`CreateClient` from Stellar to the Hub builds the `08-wasm` Stellar client state from `parameters`. Its trust root is the operator's decision, so the gateway takes it from `parameters.quorum_configs`, a JSON array whose entries carry:
+
+- `quorum_set_xdr`: the `SCPQuorumSet` XDR, hex;
+- `valid_from`: the first slot the set is in force for, defaulting to 0;
+- `quorum_set_fingerprint`: `sha256(quorum_set_xdr)`, hex, 32 bytes.
+
+The fingerprint is the operator's pin, copied into the client state as given; the gateway never derives it. A missing fingerprint, one that is not 32 bytes, or a quorum set that does not hash to it is refused with `invalid_argument` naming the entry's `valid_from`, before anything is built. The Stellar light client from the release that closes ipsadev/stellar-light-client#10 requires the field and refuses the same mismatches on chain; an older light client ignores it. `QueryStellarClientParams` returns each quorum set it serves with its fingerprint, for the operator to compare with their pins; nothing trusts that response.
+
 ## Stellar and Cosmos encoding
 
 Soroban values, IBC v2 messages, Tendermint client and consensus states and the router's packet events come from the [`ipsa-chains`](https://crates.io/crates/ipsa-chains) crate, published from the [ipsa](https://github.com/ipsadev/ipsa) repository and shared with ipsa-backend's api and provider. Its README covers revision numbers and the trusted validator set a Tendermint header carries.

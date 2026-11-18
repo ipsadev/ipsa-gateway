@@ -51,6 +51,8 @@ struct ParamQuorumConfig {
     quorum_set_xdr: String,
     #[serde(default)]
     valid_from: u64,
+    #[serde(default)]
+    quorum_set_fingerprint: String,
 }
 
 pub struct RelayHandler {
@@ -838,9 +840,39 @@ fn quorum_configs_from(parameters: &HashMap<String, String>) -> Result<Vec<Quoru
             Status::invalid_argument(format!("parameters.quorum_configs quorum_set_xdr: {e}"))
         })?;
 
+        let quorum_set_fingerprint =
+            hex::decode(entry.quorum_set_fingerprint.trim()).map_err(|e| {
+                Status::invalid_argument(format!(
+                    "parameters.quorum_configs quorum_set_fingerprint (valid_from {}): {e}",
+                    entry.valid_from
+                ))
+            })?;
+
+        if quorum_set_fingerprint.len() != 32 {
+            return Err(Status::invalid_argument(format!(
+                "parameters.quorum_configs entry valid_from {} pins no 32-byte \
+                 quorum_set_fingerprint; the fingerprint is the operator's pin and the gateway \
+                 never derives it",
+                entry.valid_from
+            )));
+        }
+
+        let computed: [u8; 32] = Sha256::digest(&quorum_set_xdr).into();
+
+        if computed.as_slice() != quorum_set_fingerprint.as_slice() {
+            return Err(Status::invalid_argument(format!(
+                "parameters.quorum_configs entry valid_from {}: quorum_set_xdr hashes to {}, not \
+                 the pinned quorum_set_fingerprint {}",
+                entry.valid_from,
+                hex::encode(computed),
+                hex::encode(&quorum_set_fingerprint)
+            )));
+        }
+
         configs.push(QuorumConfig {
             quorum_set_xdr,
             valid_from: entry.valid_from,
+            quorum_set_fingerprint,
         });
     }
 

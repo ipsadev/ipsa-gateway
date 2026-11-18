@@ -97,6 +97,7 @@ impl HeaderAssembler {
             .quorum_sets_xdr
             .into_iter()
             .map(|quorum_set_xdr| QuorumConfig {
+                quorum_set_fingerprint: Sha256::digest(&quorum_set_xdr).to_vec(),
                 quorum_set_xdr,
                 valid_from: 0,
             })
