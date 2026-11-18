@@ -15,6 +15,7 @@ use ipsa::gateway::stellar::{
     EventsRequest, LatestHeightRequest, QueryAcknowledgementRequest, QueryClientStateRequest,
     QueryClientStatesRequest, QueryConsensusStateRequest, QueryIbcHeaderRequest,
     QueryNextSeqRecvRequest, QueryPacketCommitmentRequest, QueryPacketReceiptRequest,
+    QueryStellarClientParamsRequest,
 };
 use ipsa_chains::client_state::AnyClientState;
 use ipsa_chains::conversion::{
@@ -965,4 +966,35 @@ async fn replay_stops_once_the_cursor_has_swept_past_the_target() {
         32,
         "a cursor already past the target ends the sweep without dropping earlier state"
     );
+}
+
+#[tokio::test]
+async fn query_stellar_client_params_returns_each_quorum_sets_fingerprint() {
+    const LEDGER: u32 = 4_160_600;
+    let archive = crate::archive_fixture::archive_responses(LEDGER);
+
+    let t = GatewayTest::start(None).await;
+    t.with_data(|d| {
+        d.latest_ledger = LEDGER + 2;
+        d.archive_scp = archive.scp;
+        d.archive_headers = archive.headers;
+        d.archive_tx_sets = archive.tx_sets;
+    });
+
+    let resp = t
+        .query()
+        .query_stellar_client_params(QueryStellarClientParamsRequest {
+            height: LEDGER as u64,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!resp.quorum_configs.is_empty());
+
+    for config in resp.quorum_configs {
+        let computed: [u8; 32] = Sha256::digest(&config.quorum_set_xdr).into();
+
+        assert_eq!(config.quorum_set_fingerprint, computed.to_vec());
+    }
 }
